@@ -24,7 +24,10 @@ Command-guard mode is a usability guard, not a hard sandbox. A determined proces
 ## Install
 
 ```bash
-python3 -m pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
 ## Quickstart
@@ -111,7 +114,7 @@ agentsecure apply
 
 ## Screenshots / GIFs
 
-Placeholders for the public release:
+Planned public demo assets:
 
 - `docs/assets/demo-command-guard.gif`: `agentsecure demo` showing a virtual key.
 - `docs/assets/dotenv-masking.png`: before/after `.env` masking.
@@ -135,6 +138,7 @@ tests/                 unit and local integration tests
 ## Testing
 
 ```bash
+source .venv/bin/activate
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 scripts/secret_scan.py .
 ```

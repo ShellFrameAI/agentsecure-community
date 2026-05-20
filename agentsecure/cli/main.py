@@ -137,16 +137,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace strategy. symlink is fast and lets normal edits hit the real project; copy is safer review mode.",
     )
     run_parser.add_argument("--ttl", default="2h", help="Grant duration for protected discovered secrets")
-    run_parser.add_argument("--project", default="", help="Project name to report to AgentSecure Cloud")
-    run_parser.add_argument("--task", default="", help="Human task label to report to AgentSecure Cloud")
-    run_parser.add_argument("--cloud-debug", action="store_true", help="Send detailed cloud reports for this run")
     run_parser.add_argument("agent_command", nargs=argparse.REMAINDER)
 
     subparsers.add_parser("gateway", help="Run only the local gateway")
-    daemon_parser = subparsers.add_parser("daemon", help="Run shared local AgentSecure daemon")
-    daemon_parser.add_argument("--host", default="127.0.0.1", help="Daemon API host, must be localhost")
-    daemon_parser.add_argument("--api-port", default=8787, type=int, help="Daemon API port")
-    daemon_parser.add_argument("--gateway-port", default=8765, type=int, help="Daemon gateway port")
     subparsers.add_parser("env", help="Print virtual environment variables")
 
     keys_parser = subparsers.add_parser("keys", help="Manage virtual keys")
@@ -168,10 +161,6 @@ def build_parser() -> argparse.ArgumentParser:
     protect_parser = subparsers.add_parser("protect", help="Interactively virtualize discovered secrets")
     protect_parser.add_argument("--protect-all", action="store_true", help="Virtualize all discovered secrets without prompting")
     protect_parser.add_argument("--ttl", default="2h", help="Grant duration, default 2h, max 24h")
-
-    api_parser = subparsers.add_parser("api", help="Run local AgentSecure API server")
-    api_parser.add_argument("--host", default="127.0.0.1", help="API host, must be localhost")
-    api_parser.add_argument("--port", default=8787, type=int, help="API port")
 
     init_parser = subparsers.add_parser("init", help="Initialize AgentSecure in this project")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing AgentSecure config")
@@ -218,16 +207,6 @@ def build_parser() -> argparse.ArgumentParser:
     setup_remove_parser.add_argument("agents", nargs="+", choices=SUPPORTED_AGENTS)
     setup_subparsers.add_parser("list", help="List wrapper commands")
 
-    enroll_parser = subparsers.add_parser("enroll", help="Enroll this machine with AgentSecure Cloud")
-    enroll_parser.add_argument("--api-base", default="http://127.0.0.1:8000", help="AgentSecure Cloud API base URL")
-    enroll_parser.add_argument("--token", required=True, help="Short-lived enrollment token from the dashboard")
-    enroll_parser.add_argument("--project", default="", help="Initial project name")
-
-    cloud_parser = subparsers.add_parser("cloud", help="Manage AgentSecure Cloud connection")
-    cloud_subparsers = cloud_parser.add_subparsers(dest="cloud_command")
-    cloud_subparsers.add_parser("status", help="Show cloud enrollment status")
-    cloud_subparsers.add_parser("sync", help="Push local runtime metadata to cloud")
-
     diff_parser = subparsers.add_parser("diff", help="Show changes in a kept safe workspace")
     diff_parser.add_argument("--workspace", help="Workspace path. Defaults to latest kept workspace")
     diff_parser.add_argument("--include-protected", action="store_true", help="Include protected files such as .env")
@@ -236,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     apply_parser.add_argument("--workspace", help="Workspace path. Defaults to latest kept workspace")
     apply_parser.add_argument("--dry-run", action="store_true", help="Show what would be applied without copying files")
 
-    guard_parser = subparsers.add_parser("guard", help=argparse.SUPPRESS)
+    guard_parser = subparsers.add_parser("guard", help="Run the local command-guard wrapper")
     guard_parser.add_argument("tool")
     guard_parser.add_argument("tool_args", nargs=argparse.REMAINDER)
 
@@ -250,6 +229,8 @@ def run_agent(args: argparse.Namespace) -> int:
     if cloud:
         _apply_cloud_runtime_defaults(args, cloud)
         _pull_cloud_policy(args.config, cloud)
+    project_name = getattr(args, "project", "") or os.path.basename(os.getcwd()) or "default"
+    task_label = getattr(args, "task", "") or "Untitled session"
     replacements = []
     if not args.no_discover:
         replacements = protect_secrets(args)
@@ -317,8 +298,8 @@ def run_agent(args: argparse.Namespace) -> int:
             {
                 "agent": os.path.basename(argv[0]) if argv else "",
                 "argv": argv,
-                "project": args.project or os.path.basename(os.getcwd()) or "default",
-                "task": args.task or "Untitled session",
+                "project": project_name,
+                "task": task_label,
                 "runtime": args.runtime,
                 "cwd": run_cwd,
                 "config_profile": cloud.config_profile() if cloud else {},
@@ -353,8 +334,8 @@ def run_agent(args: argparse.Namespace) -> int:
             "proxy": proxy_url,
             "cwd": run_cwd,
             "workspace": workspace_session.workspace_root if workspace_session else "",
-            "project": args.project or os.path.basename(os.getcwd()) or "default",
-            "task": args.task or "Untitled session",
+            "project": project_name,
+            "task": task_label,
             "session_id": session_id,
             "daemon": bool(daemon),
         },
@@ -367,8 +348,8 @@ def run_agent(args: argparse.Namespace) -> int:
     if cloud and cloud.status().get("enrolled"):
         cloud_session = cloud.session_payload(
             argv,
-            args.project,
-            args.task,
+            project_name,
+            task_label,
             args.runtime,
             run_cwd,
             workspace_session.workspace_root if workspace_session else "",
@@ -376,7 +357,7 @@ def run_agent(args: argparse.Namespace) -> int:
         )
         if session_id:
             cloud_session["session_id"] = session_id
-        if args.cloud_debug:
+        if getattr(args, "cloud_debug", False):
             os.environ["AGENTSECURE_CLOUD_DEBUG"] = "true"
     session_finished = False
     try:
@@ -417,8 +398,8 @@ def run_agent(args: argparse.Namespace) -> int:
                 "agent_killed" if final_status == "killed" else "agent_finished",
                 {
                     "session_id": cloud_session.get("session_id", ""),
-                    "project": args.project or os.path.basename(os.getcwd()) or "default",
-                    "task": args.task or "Untitled session",
+                    "project": project_name,
+                    "task": task_label,
                     "exit_code": exit_code,
                 },
             )

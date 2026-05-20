@@ -1,10 +1,13 @@
 import unittest
 import socket
+from io import StringIO
+from contextlib import redirect_stdout
 
 from agentsecure.cli.main import (
     _apply_proxy_environment,
     _apply_read_only_agent_mode,
     _available_gateway_port,
+    build_parser,
     _merge_no_proxy,
     _proxy_url,
 )
@@ -45,6 +48,30 @@ class CliTest(unittest.TestCase):
             "http://session_abc@127.0.0.1:8765",
             _proxy_url("127.0.0.1", 8765, "session_abc"),
         )
+
+    def test_public_help_does_not_advertise_private_cloud_commands(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            build_parser().print_help()
+        help_text = output.getvalue()
+
+        for private_command in ("daemon", "api", "enroll", "cloud"):
+            self.assertNotIn(private_command, help_text)
+        self.assertNotIn("AgentSecure Cloud", help_text)
+
+    def test_run_help_does_not_advertise_cloud_reporting_flags(self):
+        parser = build_parser()
+        output = StringIO()
+        try:
+            with redirect_stdout(output):
+                parser.parse_args(["run", "--help"])
+        except SystemExit as exc:
+            self.assertEqual(0, exc.code)
+        help_text = output.getvalue()
+
+        self.assertNotIn("--cloud-debug", help_text)
+        self.assertNotIn("--project", help_text)
+        self.assertNotIn("--task", help_text)
 
     def test_available_gateway_port_skips_busy_preferred_port(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
