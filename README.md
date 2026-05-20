@@ -2,13 +2,80 @@
 
 **By ShellFrame AI**
 
-AgentSecure Community is the open-source community/lite edition of AgentSecure by ShellFrame AI. It is a local-first demo runtime for AI coding agents that shows how an agent can work in a real project while seeing virtual secrets instead of raw `.env` values.
+[![PyPI](https://img.shields.io/pypi/v/agentsecure.svg)](https://pypi.org/project/agentsecure/)
+[![CI](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml/badge.svg)](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-This repository is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
+AgentSecure Community is a local-first CLI for AI coding-agent workflows. It demonstrates a simple idea: the agent can work in a real project, but it should see virtual or masked secrets instead of raw `.env` values.
 
-## Ownership
+The community release is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
 
-AgentSecure and ShellFrame AI are ShellFrame AI project names. This community repository is published to demonstrate the local-first secret virtualization model while keeping commercial/backend features private.
+## Install
+
+```bash
+python3 -m pip install agentsecure
+agentsecure demo
+```
+
+Use a virtual environment if you want to keep it isolated:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install agentsecure
+agentsecure demo
+```
+
+## What The Demo Shows
+
+The demo creates a temporary local project with fake secrets, simulates a command reading `.env`, and prints what the agent would see:
+
+```text
+AgentSecure community demo (local only)
+Command: cat .env
+Decision: mask OPENAI_API_KEY and block DATABASE_URL_PROD
+
+Agent-visible output:
+OPENAI_API_KEY=virt_openai_...
+
+Why:
+  OPENAI_API_KEY was replaced with virt_openai_...
+  DATABASE_URL_PROD was removed because env_policy sets mode=deny
+  Real secret values stayed local in the demo project
+  No cloud service, billing service, or enterprise policy sync was used
+```
+
+## Quickstart In A Project
+
+Create a local config:
+
+```bash
+agentsecure init
+```
+
+Create a fake `.env` for testing:
+
+```bash
+cat > .env <<'EOF'
+OPENAI_API_KEY=sk-demo-local-secret-do-not-use
+DATABASE_URL_PROD=postgres://demo:demo-password@example.invalid/app
+EOF
+```
+
+Discover likely secrets:
+
+```bash
+agentsecure discover
+```
+
+Run a command through the local guard:
+
+```bash
+agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
+```
+
+The command output should contain a `virt_...` token instead of the real secret. The real `.env` remains local and unchanged.
 
 ## What It Demonstrates
 
@@ -19,41 +86,7 @@ AgentSecure and ShellFrame AI are ShellFrame AI project names. This community re
 - Remove denied env values from agent-visible output.
 - Keep basic network, process, and file policy in JSON.
 
-Command-guard mode is a usability guard, not a hard sandbox. A determined process can bypass wrapper-based masking. Use workspace copy mode or OS sandboxing for stronger isolation.
-
-## Install
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-```
-
-## Quickstart
-
-Run the safe local demo:
-
-```bash
-agentsecure demo
-```
-
-Expected output includes a virtual OpenAI key and an explanation that `DATABASE_URL_PROD` was removed by policy:
-
-```text
-Agent-visible output:
-OPENAI_API_KEY=virt_openai_...
-```
-
-Try it in a project:
-
-```bash
-agentsecure init
-printf 'OPENAI_API_KEY=sk-demo-local-secret-do-not-use\n' > .env
-agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
-```
-
-The agent-visible output contains a `virt_...` token. The real `.env` remains local and unchanged.
+Command-guard mode is a usability guard, not a hard sandbox. A determined process can bypass wrapper-based masking. Use workspace copy mode, containers, read-only mounts, no-network defaults, or OS sandboxing for stronger isolation.
 
 ## Example Policy
 
@@ -112,6 +145,18 @@ agentsecure apply --dry-run
 agentsecure apply
 ```
 
+## Developer Setup
+
+```bash
+git clone https://github.com/ShellFrameAI/agentsecure-community.git
+cd agentsecure-community
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+agentsecure demo
+```
+
 ## Screenshots / GIFs
 
 Planned public demo assets:
@@ -139,7 +184,7 @@ tests/                 unit and local integration tests
 
 ```bash
 source .venv/bin/activate
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/secret_scan.py .
 ```
 
@@ -147,8 +192,12 @@ CI runs tests across supported Python versions and runs the local secret scan.
 
 ## Public Release Boundary
 
-This community release should not include hosted backend integration, enterprise policy sync, billing/licensing, production secrets, internal endpoints, or sensitive commercial heuristics. See [OPEN_SOURCE_PLAN.md](OPEN_SOURCE_PLAN.md) before publishing a public GitHub repository.
+This community release does not include hosted backend integration, enterprise policy sync, billing/licensing, production secrets, internal endpoints, or sensitive commercial heuristics. See [OPEN_SOURCE_PLAN.md](OPEN_SOURCE_PLAN.md) and [OPEN_SOURCE_READINESS_REPORT.md](OPEN_SOURCE_READINESS_REPORT.md) for the public/private boundary.
+
+## Ownership
+
+AgentSecure and ShellFrame AI are ShellFrame AI project names. This community repository is published to demonstrate the local-first secret virtualization model while keeping commercial/backend features private.
 
 ## License
 
-Apache License 2.0 is suggested for the community release. See [LICENSE](LICENSE).
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE).
