@@ -1,0 +1,46 @@
+{
+  "secrets": [
+    {
+      "env_name": "OPENAI_API_KEY",
+      "virtual_token": "virt_openai_demo_0000000000000001",
+      "real_secret_env": "AGENTSECURE_REAL_OPENAI_API_KEY",
+      "inject_as": "authorization_bearer",
+      "provider": "openai"
+    }
+  ],
+  "env_policy": {
+    "OPENAI_API_KEY": {
+      "mode": "virtualize",
+      "environment": "development",
+      "risk": "medium",
+      "approved_hosts": ["api.openai.com"],
+      "reason": "Agents see a virtual token, not the local real value."
+    },
+    "DATABASE_URL_PROD": {
+      "mode": "deny",
+      "environment": "production",
+      "risk": "high",
+      "reason": "Production database credentials are never exposed in community demo mode."
+    }
+  },
+  "network": {
+    "allow_domains": ["api.openai.com", "api.anthropic.com"],
+    "deny_domains": ["pastebin.com", "*.requestbin.net"],
+    "allow_ports": [80, 443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "process": {
+    "allowed_commands": []
+  },
+  "files": {
+    "protect_write": [".env", ".env.local", ".env.development", "agentsecure.json"]
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "audit": {
+    "path": ".agentsecure/audit.log"
+  }
+}

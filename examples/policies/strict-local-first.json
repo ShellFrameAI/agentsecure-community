@@ -1,0 +1,29 @@
+{
+  "network": {
+    "allow_domains": [
+      "api.openai.com",
+      "api.anthropic.com"
+    ],
+    "deny_domains": [
+      "*"
+    ],
+    "allow_ports": [443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "file": {
+    "deny_paths": [
+      "~/.ssh",
+      "~/.aws",
+      "~/.config/gcloud",
+      ".env"
+    ]
+  },
+  "process": {
+    "allowed_commands": [
+      "claude-code",
+      "codex"
+    ]
+  }
+}
+

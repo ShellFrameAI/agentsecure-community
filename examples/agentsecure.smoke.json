@@ -1,0 +1,28 @@
+{
+  "secrets": [
+    {
+      "env_name": "OPENAI_API_KEY",
+      "virtual_token": "virt_openai_smoke_0000000000000001",
+      "real_secret_env": "AGENTSECURE_REAL_OPENAI_API_KEY",
+      "inject_as": "authorization_bearer",
+      "provider": "openai"
+    }
+  ],
+  "network": {
+    "allow_domains": ["example.com"],
+    "deny_domains": [],
+    "allow_ports": [80, 443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "process": {
+    "allowed_commands": ["python"]
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8766
+  },
+  "audit": {
+    "path": ".agentsecure/smoke-audit.log"
+  }
+}

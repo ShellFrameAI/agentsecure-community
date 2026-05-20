@@ -1,0 +1,2 @@
+"""AgentSecure CLI."""
+

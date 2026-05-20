@@ -1,0 +1,48 @@
+{
+  "secrets": [
+    {
+      "env_name": "OPENAI_API_KEY",
+      "virtual_token": "virt_openai_dev_0000000000000001",
+      "real_secret_env": "AGENTSECURE_REAL_OPENAI_API_KEY",
+      "inject_as": "authorization_bearer",
+      "provider": "openai"
+    },
+    {
+      "env_name": "ANTHROPIC_API_KEY",
+      "virtual_token": "virt_anthropic_dev_0000000000000001",
+      "real_secret_env": "AGENTSECURE_REAL_ANTHROPIC_API_KEY",
+      "inject_as": "x-api-key",
+      "provider": "anthropic"
+    }
+  ],
+  "network": {
+    "allow_domains": [
+      "api.openai.com",
+      "api.anthropic.com",
+      "chatgpt.com",
+      "*.chatgpt.com",
+      "*.github.com"
+    ],
+    "deny_domains": [
+      "pastebin.com",
+      "*.requestbin.net"
+    ],
+    "allow_ports": [80, 443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "process": {
+    "allowed_commands": [
+      "claude-code",
+      "codex",
+      "cursor"
+    ]
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "audit": {
+    "path": ".agentsecure/audit.log"
+  }
+}
