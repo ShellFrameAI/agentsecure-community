@@ -1,8 +1,14 @@
 # AgentSecure Community
 
-AgentSecure Community is a local-first demo runtime for AI coding agents. It shows how an agent can work in a real project while seeing virtual secrets instead of raw `.env` values.
+**By ShellFrame AI**
 
-This repository is the community/lite release. It is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
+AgentSecure Community is the open-source community/lite edition of AgentSecure by ShellFrame AI. It is a local-first demo runtime for AI coding agents that shows how an agent can work in a real project while seeing virtual secrets instead of raw `.env` values.
+
+This repository is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
+
+## Ownership
+
+AgentSecure and ShellFrame AI are ShellFrame AI project names. This community repository is published to demonstrate the local-first secret virtualization model while keeping commercial/backend features private.
 
 ## What It Demonstrates
 
