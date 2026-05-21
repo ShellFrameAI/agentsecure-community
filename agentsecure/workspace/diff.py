@@ -16,10 +16,24 @@ class WorkspaceDiff:
             path = os.path.join(base, name)
             if name.startswith("session_") and os.path.isdir(path):
                 sessions.append((os.path.getmtime(path), path))
+            elif name.startswith("session_") and name.endswith(".path") and os.path.isfile(path):
+                workspace = self._read_workspace_marker(path)
+                if workspace and os.path.isdir(workspace):
+                    sessions.append((os.path.getmtime(path), workspace))
         if not sessions:
             return None
         sessions.sort()
         return sessions[-1][1]
+
+    def _read_workspace_marker(self, path: str) -> Optional[str]:
+        try:
+            with open(path, "r") as handle:
+                workspace = handle.readline().strip()
+        except OSError:
+            return None
+        if not workspace:
+            return None
+        return os.path.abspath(workspace)
 
     def unified_diff(
         self,
