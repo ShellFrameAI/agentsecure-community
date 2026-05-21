@@ -14,6 +14,12 @@ Run the receipts:
 bash examples/security-receipts/run_receipts.sh
 ```
 
+Run adversarial read-bypass checks:
+
+```bash
+bash examples/security-receipts/run_adversarial_receipts.sh
+```
+
 The script creates a temporary project with fake secrets only.
 
 If your environment blocks localhost binds, the network receipt may fail because the local AgentSecure gateway cannot start. Run it from a normal shell, not a restricted sandbox.
@@ -39,6 +45,34 @@ Each receipt records:
 | R3 | network exfil with credential | block | credential-bearing `curl` to non-allowlisted host exits before provider call |
 | R4 | direct destructive command | block | direct `rm` is denied when process allowlist is configured |
 | R5 | workspace copy mode | isolate | writes happen in a safe workspace; real project `.env` is unchanged |
+
+## Adversarial Findings
+
+Command-guard mode is useful for low-friction local demos, but it is wrapper-based and bypassable.
+
+Known command-guard bypasses:
+
+| ID | Attempt | Current Result | Recommended Mode |
+| --- | --- | --- | --- |
+| A1 | `/bin/cat .env` | raw `.env` can be read | workspace copy mode |
+| A2 | `python3 -c 'open(".env").read()'` | raw `.env` can be read | workspace copy mode |
+| A3 | `awk '{print}' .env` | raw `.env` can be read | workspace copy mode |
+| A4 | `sed -n p .env` | raw `.env` can be read | workspace copy mode |
+
+The stronger receipt is workspace copy mode:
+
+```bash
+agentsecure run --runtime workspace --workspace-mode copy --protect-all -- python3 -c 'print(open(".env").read())'
+```
+
+Expected:
+
+```text
+OPENAI_API_KEY=virt_openai_...
+DATABASE_URL_PROD real value is not printed
+```
+
+For real or adversarial agents, prefer workspace copy mode, containers, read-only mounts, and no-network defaults.
 
 ## R1: `.env` Read
 
