@@ -6,7 +6,9 @@
 [![CI](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml/badge.svg)](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-AgentSecure Community is a local-first CLI for AI coding-agent workflows. It demonstrates a simple idea: the agent can work in a real project, but it should see virtual or masked secrets instead of raw `.env` values.
+AI coding agents run where developer secrets already live: `.env` files, shell environments, MCP configs, local credentials, and project settings. GitGuardian's 2026 State of Secrets Sprawl report found [28.65 million new hardcoded secrets in public GitHub commits in 2025](https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/) and [24,008 unique secrets in MCP-related configuration files, including 2,117 valid credentials](https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/). Reported testing has also shown agent tools reading `.env` files despite ignore-file expectations; [The Register reproduced Claude Code reading `.env` with `.claudeignore` and `.gitignore` entries present](https://www.theregister.com/2026/01/28/claude_code_ai_secrets_files/), while [Anthropic's current docs recommend explicit file-access deny rules for sensitive files](https://code.claude.com/docs/en/configuration).
+
+AgentSecure Community is a local-first CLI for AI coding-agent workflows. It demonstrates a simple idea: ignore files are not a secret boundary, so the agent should see virtual or masked secrets instead of raw `.env` values.
 
 The community release is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
 
