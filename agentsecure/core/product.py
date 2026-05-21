@@ -89,7 +89,7 @@ class ProductService:
             "next_steps": [
                 "agentsecure discover",
                 "agentsecure run --protect-all -- <agent-command>",
-                "agentsecure api",
+                "agentsecure status",
             ],
         }
 

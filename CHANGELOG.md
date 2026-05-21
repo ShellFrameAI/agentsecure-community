@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-05-21
+
+- Updated README install and first-run instructions for PyPI users.
+- Clarified default `--protect-all` behavior versus explicit deny policy behavior.
+- Removed private API command guidance from `agentsecure init` next steps.
+
 ## 0.1.0 - 2026-05-20
 
 - Initial AgentSecure Community release.
