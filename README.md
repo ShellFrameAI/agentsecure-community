@@ -29,7 +29,7 @@ agentsecure demo
 
 ## What The Demo Shows
 
-The demo creates a temporary local project with fake secrets, simulates a command reading `.env`, and prints what the agent would see:
+The built-in demo creates a temporary local project with fake secrets, applies a small sample policy, simulates a command reading `.env`, and prints what the agent would see:
 
 ```text
 AgentSecure community demo (local only)
@@ -75,7 +75,9 @@ Run a command through the local guard:
 agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
 ```
 
-The command output should contain a `virt_...` token instead of the real secret. The real `.env` remains local and unchanged.
+By default, `--protect-all` virtualizes discovered secrets. The command output should contain `virt_...` tokens instead of the real values. The real `.env` remains local and unchanged.
+
+Denied values are removed only when policy sets `mode: "deny"` for that environment variable. The built-in `agentsecure demo` includes that policy for `DATABASE_URL_PROD` so you can see both behaviors: virtualize and deny.
 
 ## What It Demonstrates
 
