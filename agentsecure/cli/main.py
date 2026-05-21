@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import getpass
 import json
 import os
@@ -267,7 +268,7 @@ def run_agent(args: argparse.Namespace) -> int:
     container = Container.from_config_path(args.config)
     run_cwd = os.getcwd()
     workspace_session = None
-    materializer = WorkspaceMaterializer()
+    materializer = WorkspaceMaterializer(_workspace_base_for_runtime(run_cwd, args.runtime))
     should_create_workspace = bool(replacements or container.config.files.protect_write)
     if args.runtime == "command-guard":
         print("AgentSecure runtime: command-guard", flush=True)
@@ -389,7 +390,8 @@ def run_agent(args: argparse.Namespace) -> int:
             os.environ["AGENTSECURE_CLOUD_DEBUG"] = "true"
     session_finished = False
     try:
-        process = _start_agent_process(argv, env, run_cwd)
+        output_sanitizer = SecretOutputSanitizer.from_config_path(args.config)
+        process = _start_agent_process(argv, env, run_cwd, sanitize_output=True)
         process_group_id = _process_group_id(process)
         if cloud_session and cloud and cloud.status().get("enrolled"):
             command_executor = _run_command_executor(
@@ -414,7 +416,7 @@ def run_agent(args: argparse.Namespace) -> int:
         elif command_executor:
             command_poller = CommandPoller(cloud, command_executor)
             command_poller.start()
-        exit_code = process.wait()
+        exit_code = _wait_for_agent_process(process, output_sanitizer)
         if exit_code is None or exit_code >= 0:
             _wait_for_process_group_exit(process_group_id)
         final_status = "killed" if exit_code is not None and exit_code < 0 else "finished"
@@ -452,10 +454,51 @@ def run_agent(args: argparse.Namespace) -> int:
             )
 
 
-def _start_agent_process(argv: List[str], env, cwd: str):
+def _workspace_base_for_runtime(source_root: str, runtime: str) -> str:
+    if runtime != "workspace":
+        return ".agentsecure/workspaces"
+    digest = hashlib.sha256(os.path.abspath(source_root).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), "agentsecure-workspaces", digest)
+
+
+def _start_agent_process(argv: List[str], env, cwd: str, sanitize_output: bool = False):
+    stdout = subprocess.PIPE if sanitize_output else None
+    stderr = subprocess.PIPE if sanitize_output else None
     if os.name == "posix":
-        return subprocess.Popen(argv, env=env, cwd=cwd, preexec_fn=os.setsid)
-    return subprocess.Popen(argv, env=env, cwd=cwd)
+        return subprocess.Popen(argv, env=env, cwd=cwd, stdout=stdout, stderr=stderr, preexec_fn=os.setsid)
+    return subprocess.Popen(argv, env=env, cwd=cwd, stdout=stdout, stderr=stderr)
+
+
+def _wait_for_agent_process(process, sanitizer: SecretOutputSanitizer) -> int:
+    if process.stdout is None and process.stderr is None:
+        return process.wait()
+
+    stdout_thread = _start_output_forwarder(process.stdout, sys.stdout.buffer, sanitizer)
+    stderr_thread = _start_output_forwarder(process.stderr, sys.stderr.buffer, sanitizer)
+    exit_code = process.wait()
+    if stdout_thread:
+        stdout_thread.join()
+    if stderr_thread:
+        stderr_thread.join()
+    return int(exit_code)
+
+
+def _start_output_forwarder(source, target, sanitizer: SecretOutputSanitizer):
+    if source is None:
+        return None
+
+    def forward() -> None:
+        while True:
+            chunk = source.readline()
+            if not chunk:
+                break
+            target.write(sanitizer.sanitize_bytes(chunk))
+            target.flush()
+
+    thread = threading.Thread(target=forward)
+    thread.daemon = True
+    thread.start()
+    return thread
 
 
 def _process_group_id(process) -> int:

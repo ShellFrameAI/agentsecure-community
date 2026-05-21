@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-AGENTSECURE_CMD=${AGENTSECURE_CMD:-"python3 -m agentsecure"}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+AGENTSECURE_CMD=${AGENTSECURE_CMD:-}
 WORKDIR=${1:-"$(mktemp -d)"}
 
 pass_count=0
@@ -47,8 +49,12 @@ not_contains() {
 }
 
 run_as_string() {
-  # shellcheck disable=SC2086
-  $AGENTSECURE_CMD "$@" 2>&1
+  if [ -n "$AGENTSECURE_CMD" ]; then
+    # shellcheck disable=SC2086
+    $AGENTSECURE_CMD "$@" 2>&1
+  else
+    PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m agentsecure "$@" 2>&1
+  fi
 }
 
 mkdir -p "$WORKDIR"
@@ -123,6 +129,15 @@ if contains "$out" "OPENAI_API_KEY=virt_openai_" &&
   pass "A5" "workspace copy python read" "workspace copy mode exposes sanitized .env"
 else
   fail "A5" "workspace copy python read" "workspace copy mode did not sanitize as expected"
+fi
+
+out="$(run_as_string run --runtime workspace --workspace-mode copy --protect-all -- python3 -c 'import os; print(open(".env").read(), end=""); print("TRAVERSE"); print(open("../../../.env").read(), end="")')"
+if contains "$out" "FileNotFoundError" &&
+  not_contains "$out" "sk-demo-local-secret-do-not-use" &&
+  not_contains "$out" "postgres://demo:demo-password@example.invalid/app"; then
+  pass "A6" "workspace copy relative traversal" "relative traversal did not reach original .env"
+else
+  fail "A6" "workspace copy relative traversal" "relative traversal reached original .env or did not fail closed"
 fi
 
 printf "\nSummary: %s passed, %s known risks, %s failed\n" "$pass_count" "$risk_count" "$fail_count"

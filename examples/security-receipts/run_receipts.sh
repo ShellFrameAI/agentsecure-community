@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -u
 
-AGENTSECURE_CMD=${AGENTSECURE_CMD:-"python3 -m agentsecure"}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+AGENTSECURE_CMD=${AGENTSECURE_CMD:-}
 WORKDIR=${1:-"$(mktemp -d)"}
 
 pass_count=0
@@ -47,8 +49,12 @@ not_contains() {
 }
 
 run_as_string() {
-  # shellcheck disable=SC2086
-  $AGENTSECURE_CMD "$@" 2>&1
+  if [ -n "$AGENTSECURE_CMD" ]; then
+    # shellcheck disable=SC2086
+    $AGENTSECURE_CMD "$@" 2>&1
+  else
+    PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m agentsecure "$@" 2>&1
+  fi
 }
 
 mkdir -p "$WORKDIR"

@@ -48,16 +48,17 @@ Each receipt records:
 
 ## Adversarial Findings
 
-Command-guard mode is useful for low-friction local demos, but it is wrapper-based and bypassable.
+Command-guard mode is useful for low-friction local demos. It combines command wrappers with parent-process output sanitization.
 
-Known command-guard bypasses:
+Adversarial command-guard checks:
 
 | ID | Attempt | Current Result | Recommended Mode |
 | --- | --- | --- | --- |
-| A1 | `/bin/cat .env` | raw `.env` can be read | workspace copy mode |
-| A2 | `python3 -c 'open(".env").read()'` | raw `.env` can be read | workspace copy mode |
-| A3 | `awk '{print}' .env` | raw `.env` can be read | workspace copy mode |
-| A4 | `sed -n p .env` | raw `.env` can be read | workspace copy mode |
+| A1 | `/bin/cat .env` | printed raw values are sanitized | workspace copy mode for stronger isolation |
+| A2 | `python3 -c 'open(".env").read()'` | printed raw values are sanitized | workspace copy mode for stronger isolation |
+| A3 | `awk '{print}' .env` | printed raw values are sanitized | workspace copy mode for stronger isolation |
+| A4 | `sed -n p .env` | printed raw values are sanitized | workspace copy mode for stronger isolation |
+| A6 | `../../../.env` from workspace copy mode | original `.env` is not reachable by relative traversal | keep workspace outside source repo |
 
 The stronger receipt is workspace copy mode:
 
@@ -72,7 +73,9 @@ OPENAI_API_KEY=virt_openai_...
 DATABASE_URL_PROD real value is not printed
 ```
 
-For real or adversarial agents, prefer workspace copy mode, containers, read-only mounts, and no-network defaults.
+Parent-process output sanitization catches exact real secret values that are printed to stdout or stderr. It does not prove a process could not read a secret internally, transform it, encode it, or exfiltrate it through an unguarded channel. For real or adversarial agents, prefer workspace copy mode, containers, read-only mounts, and no-network defaults.
+
+AgentSecure-created workspace sessions are placed outside the source repo and tracked with a local marker under `.agentsecure/workspaces`, so `agentsecure diff` and `agentsecure apply` can still find kept workspaces.
 
 ## R1: `.env` Read
 

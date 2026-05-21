@@ -33,10 +33,15 @@ class WorkspaceStrategy(ABC):
         created_at = now_seconds()
         expires_at = created_at + parse_duration_seconds(request.ttl)
         session_id = "session_%s" % uuid.uuid4().hex[:16]
-        workspace_root = os.path.abspath(
-            os.path.join(request.source_root, self._workspace_base, session_id)
-        )
+        if os.path.isabs(self._workspace_base):
+            workspace_root = os.path.abspath(os.path.join(self._workspace_base, session_id))
+        else:
+            workspace_root = os.path.abspath(
+                os.path.join(request.source_root, self._workspace_base, session_id)
+            )
         os.makedirs(workspace_root, exist_ok=False)
+        if os.path.isabs(self._workspace_base):
+            self._write_external_workspace_marker(request.source_root, session_id, workspace_root)
         return WorkspaceSession(
             session_id=session_id,
             source_root=os.path.abspath(request.source_root),
@@ -45,6 +50,13 @@ class WorkspaceStrategy(ABC):
             expires_at=expires_at,
             mode=request.mode,
         )
+
+    def _write_external_workspace_marker(self, source_root: str, session_id: str, workspace_root: str) -> None:
+        marker_base = os.path.join(os.path.abspath(source_root), ".agentsecure", "workspaces")
+        os.makedirs(marker_base, exist_ok=True)
+        marker_path = os.path.join(marker_base, session_id + ".path")
+        with open(marker_path, "w") as handle:
+            handle.write(os.path.abspath(workspace_root) + "\n")
 
     def _filtered_dirnames(self, rel_root: str, dirnames):
         return [
@@ -137,4 +149,3 @@ class WorkspaceStrategyFactory:
         if normalized == "symlink":
             return SymlinkWorkspaceStrategy(self._workspace_base, self._rewriter)
         raise ValueError("unsupported workspace mode: %s" % mode)
-
