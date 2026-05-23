@@ -1,0 +1,48 @@
+{
+  "secrets": [],
+  "env_policy": {
+    "OPENAI_API_KEY": {
+      "mode": "virtualize",
+      "approved_hosts": ["api.openai.com"],
+      "reason": "Agent sees a virtual token; AgentSecure injects the real key only at the configured provider proxy."
+    }
+  },
+  "network": {
+    "allow_domains": ["api.openai.com"],
+    "deny_domains": [],
+    "allow_ports": [80, 443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "provider_catalog": {
+    "openai": {
+      "env_name": "OPENAI_API_KEY",
+      "base_url_env": "OPENAI_BASE_URL",
+      "upstream": "https://api.openai.com",
+      "local_path": "/providers/openai",
+      "inject_as": "authorization_bearer",
+      "allow_paths": ["/v1/"],
+      "allow_domains": ["api.openai.com"]
+    }
+  },
+  "provider_proxy": {
+    "enabled": true,
+    "providers": {
+      "openai": {
+        "env_name": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+        "upstream": "https://api.openai.com",
+        "local_path": "/providers/openai",
+        "inject_as": "authorization_bearer",
+        "allow_paths": ["/v1/"]
+      }
+    }
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "audit": {
+    "path": ".agentsecure/audit.log"
+  }
+}

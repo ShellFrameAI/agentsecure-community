@@ -69,6 +69,7 @@ class Container:
             self.token_resolver,
             self.audit_logger,
             self.bindings,
+            self.config.provider_proxy,
         )
 
     def _bindings_by_token(self, config: AgentSecureConfig) -> Dict[str, SecretBinding]:

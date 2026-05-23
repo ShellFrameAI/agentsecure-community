@@ -1,5 +1,6 @@
 import json
 import os
+import pkgutil
 import socket
 import stat
 from typing import Any, Dict, List
@@ -12,40 +13,11 @@ from agentsecure.discovery.scanner import SecretScanner
 from agentsecure.implementations.grant_store import LocalJsonGrantStore
 
 
-DEFAULT_CONFIG = {
-    "secrets": [],
-    "env_policy": {},
-    "network": {
-        "allow_domains": [
-            "api.openai.com",
-            "api.anthropic.com",
-            "chatgpt.com",
-            "*.chatgpt.com",
-        ],
-        "deny_domains": [],
-        "allow_ports": [80, 443],
-        "deny_ip_literals": True,
-        "deny_private_networks": True,
-    },
-    "process": {
-        "allowed_commands": [],
-    },
-    "files": {
-        "protect_write": [
-            ".env",
-            ".env.local",
-            ".env.development",
-            "agentsecure.json",
-        ],
-    },
-    "gateway": {
-        "host": "127.0.0.1",
-        "port": 8765,
-    },
-    "audit": {
-        "path": ".agentsecure/audit.log",
-    },
-}
+def default_config() -> Dict[str, Any]:
+    data = pkgutil.get_data("agentsecure", "config/default_agentsecure.json")
+    if data is None:
+        raise RuntimeError("default AgentSecure config is missing")
+    return json.loads(data.decode("utf-8"))
 
 
 class ProductService:
@@ -65,7 +37,7 @@ class ProductService:
         if os.path.exists(self.config_path) and not force:
             config_created = False
         else:
-            config = json.loads(json.dumps(DEFAULT_CONFIG))
+            config = default_config()
             config["gateway"]["port"] = self._available_port(config["gateway"]["port"])
             self.writer.save(self.config_path, config)
             created.append(self.config_path)

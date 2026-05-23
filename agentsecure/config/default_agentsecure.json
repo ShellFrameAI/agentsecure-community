@@ -1,0 +1,49 @@
+{
+  "secrets": [],
+  "env_policy": {},
+  "network": {
+    "allow_domains": [
+      "api.openai.com",
+      "api.anthropic.com",
+      "chatgpt.com",
+      "*.chatgpt.com"
+    ],
+    "deny_domains": [],
+    "allow_ports": [80, 443],
+    "deny_ip_literals": true,
+    "deny_private_networks": true
+  },
+  "process": {
+    "allowed_commands": []
+  },
+  "files": {
+    "protect_write": [
+      ".env",
+      ".env.local",
+      ".env.development",
+      "agentsecure.json"
+    ]
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
+  "provider_catalog": {
+    "openai": {
+      "env_name": "OPENAI_API_KEY",
+      "base_url_env": "OPENAI_BASE_URL",
+      "upstream": "https://api.openai.com",
+      "local_path": "/providers/openai",
+      "inject_as": "authorization_bearer",
+      "allow_paths": ["/v1/"],
+      "allow_domains": ["api.openai.com"]
+    }
+  },
+  "provider_proxy": {
+    "enabled": false,
+    "providers": {}
+  },
+  "audit": {
+    "path": ".agentsecure/audit.log"
+  }
+}

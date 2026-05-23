@@ -6,11 +6,13 @@ from contextlib import redirect_stdout
 from agentsecure.cli.main import (
     _apply_proxy_environment,
     _apply_read_only_agent_mode,
+    _strip_backing_secret_environment,
     _available_gateway_port,
     build_parser,
     _merge_no_proxy,
     _proxy_url,
 )
+from agentsecure.core.models import AgentSecureConfig, SecretBinding
 
 
 class CliTest(unittest.TestCase):
@@ -42,6 +44,34 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(1, merged.split(",").count("localhost"))
         self.assertIn("example.com", merged)
+
+    def test_no_proxy_merge_drops_wildcard(self):
+        merged = _merge_no_proxy("*,api.openai.com")
+
+        self.assertNotIn("*", merged.split(","))
+        self.assertIn("api.openai.com", merged)
+
+    def test_strips_backing_secret_environment(self):
+        env = {
+            "AGENTSECURE_REAL_OPENAI_KEY": "sk-real",
+            "OPENAI_API_KEY": "sk-real",
+        }
+        config = AgentSecureConfig(
+            secrets=[
+                SecretBinding(
+                    env_name="OPENAI_API_KEY",
+                    virtual_token="virt_openai_test",
+                    real_secret_env="AGENTSECURE_REAL_OPENAI_KEY",
+                    provider="openai",
+                )
+            ]
+        )
+        container = type("Container", (), {"config": config})()
+
+        _strip_backing_secret_environment(env, container)
+
+        self.assertNotIn("AGENTSECURE_REAL_OPENAI_KEY", env)
+        self.assertIn("OPENAI_API_KEY", env)
 
     def test_proxy_url_includes_session_as_proxy_username(self):
         self.assertEqual(

@@ -22,25 +22,19 @@ SKIP_DIRS = {
     "*.egg-info",
 }
 
-ALLOW_MARKERS = (
-    "demo",
-    "dummy",
-    "example",
-    "fake",
-    "fixture",
-    "placeholder",
-    "sample",
-    "test",
-    "do-not-use",
+ALLOWED_SECRET_VALUES = {
+    "sk-demo-local-secret-do-not-use",
+    "sk_test_dummy_value_do_not_use",
+    "sk-real-local-secret",
+    "sk-receipt-real-secret",
+    "sk-real-openai-local-test",
+    "sk-doctor-local-test",
+    "sk-command-guard-real-secret",
+    "sk-workspace-real-secret",
+    "sk-integration-real-secret",
+    "sk-configured-no-discover-secret",
     "sk-real",
-    "sk-cloud",
-    "real-secret",
-    "secret-value",
-    "localhost",
-    "127.0.0.1",
-    ".host.domain",
-    ".prod.host",
-)
+}
 
 
 @dataclass(frozen=True)
@@ -77,10 +71,10 @@ def scan_path(root: str) -> List[Finding]:
             continue
         rel_path = os.path.relpath(path, root)
         for line_number, line in enumerate(lines, 1):
-            if _is_allowed_placeholder(line):
-                continue
             for kind, pattern in SECRET_PATTERNS:
-                if pattern.search(line):
+                for match in pattern.finditer(line):
+                    if _is_allowed_placeholder(kind, match.group(0), rel_path):
+                        continue
                     findings.append(Finding(rel_path, line_number, kind))
     return findings
 
@@ -96,9 +90,26 @@ def _iter_files(root: str) -> Iterable[str]:
             yield os.path.join(current, filename)
 
 
-def _is_allowed_placeholder(line: str) -> bool:
-    lowered = line.lower()
-    return any(marker in lowered for marker in ALLOW_MARKERS)
+def _is_allowed_placeholder(kind: str, value: str, rel_path: str) -> bool:
+    if value in ALLOWED_SECRET_VALUES:
+        return True
+    if kind == "github token" and rel_path == "tests/test_secret_scan.py":
+        return True
+    if kind == "credential url" and any(
+        marker in value
+        for marker in (
+            "example.invalid",
+            "production.example",
+            "prod.example",
+            "dev.example",
+            ".host.domain",
+            ".prod.host",
+        )
+    ):
+        return True
+    if rel_path.startswith(("tests/", "examples/")) and "do-not-use" in value:
+        return True
+    return False
 
 
 def main(argv=None) -> int:

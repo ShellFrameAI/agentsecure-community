@@ -144,6 +144,23 @@ class GatewayConfig:
 
 
 @dataclass(frozen=True)
+class ProviderProxyProvider:
+    name: str
+    env_name: str
+    base_url_env: str
+    upstream: str
+    local_path: str
+    inject_as: str = "authorization_bearer"
+    allow_paths: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ProviderProxyConfig:
+    enabled: bool = False
+    providers: Dict[str, ProviderProxyProvider] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Capability:
     name: str
     type: str
@@ -179,5 +196,6 @@ class AgentSecureConfig:
     files: FilePolicy = field(default_factory=FilePolicy)
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    provider_proxy: ProviderProxyConfig = field(default_factory=ProviderProxyConfig)
     capabilities: Dict[str, Capability] = field(default_factory=dict)
     raw: Dict[str, Any] = field(default_factory=dict)

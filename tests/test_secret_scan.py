@@ -25,6 +25,17 @@ class SecretScanTest(unittest.TestCase):
         self.assertEqual(1, len(findings))
         self.assertEqual("github token", findings[0].kind)
 
+    def test_marker_words_do_not_hide_real_looking_tokens(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "settings.txt")
+            with open(path, "w") as handle:
+                handle.write("REAL_TOKEN_FOR_test=ghp_1234567890abcdefghijklmnopqrstuvwxyz\n")
+
+            findings = scan_path(temp_dir)
+
+        self.assertEqual(1, len(findings))
+        self.assertEqual("github token", findings[0].kind)
+
 
 if __name__ == "__main__":
     unittest.main()
