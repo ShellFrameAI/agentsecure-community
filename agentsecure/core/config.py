@@ -1,8 +1,10 @@
 import copy
 import json
 import os
+import re
 import tempfile
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 from agentsecure.core.capabilities import is_loopback_host, is_valid_port
 from agentsecure.core.models import (
@@ -14,6 +16,8 @@ from agentsecure.core.models import (
     GatewayConfig,
     FilePolicy,
     NetworkPolicy,
+    ProviderProxyConfig,
+    ProviderProxyProvider,
     ProcessPolicy,
     SecretBinding,
 )
@@ -45,6 +49,8 @@ class JsonConfigLoader:
         files_data = data.get("files", {})
         audit_data = data.get("audit", {})
         gateway_data = data.get("gateway", {})
+        gateway = self._parse_gateway(gateway_data)
+        provider_proxy = self._parse_provider_proxy(data.get("provider_proxy", {}))
 
         return AgentSecureConfig(
             secrets=secrets,
@@ -63,10 +69,8 @@ class JsonConfigLoader:
                 protect_write=list(files_data.get("protect_write", [])),
             ),
             audit=AuditConfig(path=str(audit_data.get("path", ".agentsecure/audit.log"))),
-            gateway=GatewayConfig(
-                host=str(gateway_data.get("host", "127.0.0.1")),
-                port=int(gateway_data.get("port", 8765)),
-            ),
+            gateway=gateway,
+            provider_proxy=provider_proxy,
             capabilities=capabilities,
             raw=data,
         )
@@ -113,6 +117,111 @@ class JsonConfigLoader:
                 capability=capability,
             )
         return EnvPolicy(rules)
+
+    def _parse_provider_proxy(self, value: Dict[str, Any]) -> ProviderProxyConfig:
+        if not value:
+            return ProviderProxyConfig()
+        if not isinstance(value, dict):
+            raise ConfigError("provider_proxy must be a JSON object")
+        providers_data = value.get("providers", {})
+        if not isinstance(providers_data, dict):
+            raise ConfigError("provider_proxy.providers must be a JSON object")
+        providers = {}
+        for name, provider_data in providers_data.items():
+            if not isinstance(provider_data, dict):
+                raise ConfigError("provider_proxy.providers.%s must be a JSON object" % name)
+            provider_name = str(name).strip()
+            env_name = str(provider_data.get("env_name", "")).strip()
+            base_url_env = str(provider_data.get("base_url_env", "")).strip()
+            upstream = str(provider_data.get("upstream", "")).strip().rstrip("/")
+            local_path = "/" + str(provider_data.get("local_path", "")).strip().strip("/")
+            inject_as = str(provider_data.get("inject_as", "authorization_bearer"))
+            allow_paths_value = provider_data.get("allow_paths", [])
+            if not provider_name:
+                raise ConfigError("provider_proxy provider name is required")
+            self._validate_env_name("provider_proxy.providers.%s.env_name" % provider_name, env_name)
+            self._validate_env_name("provider_proxy.providers.%s.base_url_env" % provider_name, base_url_env)
+            self._validate_upstream("provider_proxy.providers.%s.upstream" % provider_name, upstream)
+            if local_path == "/":
+                raise ConfigError("provider_proxy.providers.%s.local_path is required" % provider_name)
+            if inject_as != "authorization_bearer":
+                raise ConfigError("provider_proxy.providers.%s.inject_as must be authorization_bearer" % provider_name)
+            if not isinstance(allow_paths_value, list):
+                raise ConfigError("provider_proxy.providers.%s.allow_paths must be a list" % provider_name)
+            allow_paths = [str(path) for path in allow_paths_value]
+            providers[provider_name] = ProviderProxyProvider(
+                name=provider_name,
+                env_name=env_name,
+                base_url_env=base_url_env,
+                upstream=upstream,
+                local_path=local_path,
+                inject_as=inject_as,
+                allow_paths=allow_paths,
+            )
+        self._validate_provider_proxy_paths(providers)
+        return ProviderProxyConfig(
+            enabled=bool(value.get("enabled", False)),
+            providers=providers,
+        )
+
+    def _validate_provider_proxy_paths(self, providers: Dict[str, ProviderProxyProvider]) -> None:
+        paths = []
+        for provider in providers.values():
+            local_path = provider.local_path.rstrip("/")
+            for existing_name, existing_path in paths:
+                if (
+                    local_path == existing_path
+                    or local_path.startswith(existing_path + "/")
+                    or existing_path.startswith(local_path + "/")
+                ):
+                    raise ConfigError(
+                        "provider_proxy.providers.%s.local_path overlaps with provider_proxy.providers.%s.local_path"
+                        % (provider.name, existing_name)
+                    )
+            paths.append((provider.name, local_path))
+
+    def _parse_gateway(self, gateway_data: Dict[str, Any]) -> GatewayConfig:
+        host = str(gateway_data.get("host", "127.0.0.1")).strip() or "127.0.0.1"
+        try:
+            port = int(gateway_data.get("port", 8765))
+        except (TypeError, ValueError):
+            raise ConfigError("gateway.port must be an integer")
+        if not is_loopback_host(host):
+            raise ConfigError("gateway.host must be loopback-only")
+        if not is_valid_port(port):
+            raise ConfigError("gateway.port must be between 1 and 65535")
+        return GatewayConfig(host=host, port=port)
+
+    def _validate_env_name(self, path: str, value: str) -> None:
+        if not value:
+            raise ConfigError("%s is required" % path)
+        if not re.match(r"^[A-Z_][A-Z0-9_]*$", value):
+            raise ConfigError("%s must be an uppercase environment variable name" % path)
+        blocked = {
+            "PATH",
+            "HOME",
+            "SHELL",
+            "PYTHONPATH",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        }
+        if value in blocked:
+            raise ConfigError("%s must not override critical process environment" % path)
+
+    def _validate_upstream(self, path: str, upstream: str) -> None:
+        parsed = urlsplit(upstream)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ConfigError("%s must be an https URL with a host" % path)
+        try:
+            port = parsed.port
+        except ValueError:
+            raise ConfigError("%s port is invalid" % path)
+        if port is not None and not is_valid_port(port):
+            raise ConfigError("%s port must be between 1 and 65535" % path)
 
     def _parse_capabilities(self, value: Dict[str, Any]) -> Dict[str, Capability]:
         if not isinstance(value, dict):

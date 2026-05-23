@@ -32,6 +32,8 @@ from agentsecure.cli.project import (
     show_status,
     uninstall_agentsecure,
 )
+from agentsecure.cli.proxy import add_proxy_subparser, handle_proxy
+from agentsecure.cli.receipts import handle_receipts
 from agentsecure.cli.secrets import (
     discover_secrets,
     handle_keys,
@@ -57,6 +59,7 @@ from agentsecure.core.capabilities import broker_url_for_env
 from agentsecure.core.container import Container
 from agentsecure.core.key_service import KeyManagementError, KeyManagementService
 from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretReplacement
+from agentsecure.core.provider_proxy import configured_provider_base_url, provider_base_local_path
 from agentsecure.core.product import ProductService
 from agentsecure.core.time import DurationError
 from agentsecure.daemon.commands import CommandExecutor, CommandPoller
@@ -116,6 +119,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return handle_files(args)
     if args.command == "network":
         return handle_network(args)
+    if args.command == "proxy":
+        return handle_proxy(args)
+    if args.command == "receipts":
+        return handle_receipts(args)
     if args.command == "policy":
         return handle_policy(args)
     if args.command == "setup":
@@ -225,6 +232,9 @@ def build_parser() -> argparse.ArgumentParser:
     network_remove_parser = network_subparsers.add_parser("remove", help="Remove domains from credential allowlist")
     network_remove_parser.add_argument("domains", nargs="+")
 
+    add_proxy_subparser(subparsers)
+    receipts_parser = subparsers.add_parser("receipts", help="Run replayable AgentSecure proof receipts")
+    receipts_parser.add_argument("--proxy", action="store_true", help="Run provider proxy receipts")
     add_policy_subparser(subparsers)
 
     setup_parser = subparsers.add_parser("setup", help="Install local protected agent command wrappers")
@@ -266,6 +276,7 @@ def run_agent(args: argparse.Namespace) -> int:
         if isinstance(replacements, int):
             return replacements
     container = Container.from_config_path(args.config)
+    replacements.extend(_configured_secret_replacements(container, replacements))
     run_cwd = os.getcwd()
     workspace_session = None
     materializer = WorkspaceMaterializer(_workspace_base_for_runtime(run_cwd, args.runtime))
@@ -346,6 +357,7 @@ def run_agent(args: argparse.Namespace) -> int:
     env = os.environ.copy()
     for env_name in container.config.env_policy.rules:
         env.pop(env_name, None)
+    _strip_backing_secret_environment(env, container)
     env.update(container.virtual_env_provider.build_environment())
     if args.runtime == "command-guard":
         CommandGuardWrapperInstaller(args.config).install(env)
@@ -354,6 +366,7 @@ def run_agent(args: argparse.Namespace) -> int:
         env["AGENTSECURE_SESSION_ID"] = session_id
     proxy_url = _proxy_url(gateway_host, gateway_port, session_id)
     _apply_proxy_environment(env, proxy_url)
+    _apply_provider_proxy_environment(env, container, gateway_host, gateway_port)
     command_metadata = safe_command_metadata(argv)
     container.audit_logger.record(
         "agent_started",
@@ -625,6 +638,7 @@ def _start_local_gateway_thread(container: Container, host: str, port: int):
         container.token_resolver,
         container.audit_logger,
         container.bindings,
+        container.config.provider_proxy,
     )
 
     def run_gateway_thread() -> None:
@@ -809,6 +823,59 @@ def _apply_proxy_environment(env, proxy_url: str) -> None:
     env["no_proxy"] = no_proxy
 
 
+def _apply_provider_proxy_environment(env, container: Container, gateway_host: str, gateway_port: int) -> None:
+    if not container.config.provider_proxy.enabled:
+        return
+    raw = dict(container.config.raw)
+    gateway = dict(raw.get("gateway", {}))
+    gateway["host"] = gateway_host
+    gateway["port"] = gateway_port
+    raw["gateway"] = gateway
+    for provider in container.config.provider_proxy.providers.values():
+        provider_data = {
+            "local_path": provider_base_local_path(provider.local_path, provider.allow_paths),
+        }
+        env[provider.base_url_env] = configured_provider_base_url(raw, provider_data)
+
+
+def _strip_backing_secret_environment(env, container: Container) -> None:
+    for binding in container.config.secrets:
+        if binding.real_secret_env:
+            env.pop(binding.real_secret_env, None)
+
+
+def _configured_secret_replacements(container: Container, existing: List[SecretReplacement]) -> List[SecretReplacement]:
+    existing_names = set(replacement.name for replacement in existing)
+    replacements = []
+    for binding in container.config.secrets:
+        if binding.env_name in existing_names:
+            continue
+        real_value = container.token_resolver.resolve(binding.virtual_token) or ""
+        if not real_value:
+            continue
+        rule = container.config.env_policy.rule_for(binding.env_name)
+        if rule.mode == "deny":
+            replacements.append(
+                SecretReplacement(
+                    source="configured",
+                    name=binding.env_name,
+                    real_value=real_value,
+                    virtual_value="",
+                    action="remove",
+                )
+            )
+        elif rule.mode != "broker":
+            replacements.append(
+                SecretReplacement(
+                    source="configured",
+                    name=binding.env_name,
+                    real_value=real_value,
+                    virtual_value=binding.virtual_token,
+                )
+            )
+    return replacements
+
+
 def _merge_no_proxy(existing: str) -> str:
     defaults = [
         "localhost",
@@ -825,6 +892,8 @@ def _merge_no_proxy(existing: str) -> str:
         if not value:
             continue
         key = value.lower()
+        if key == "*":
+            continue
         if key not in seen:
             values.append(value)
             seen.add(key)

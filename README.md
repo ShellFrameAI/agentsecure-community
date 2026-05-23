@@ -81,6 +81,52 @@ By default, `--protect-all` virtualizes discovered secrets. The command output s
 
 Denied values are removed only when policy sets `mode: "deny"` for that environment variable. The built-in `agentsecure demo` includes that policy for `DATABASE_URL_PROD` so you can see both behaviors: virtualize and deny.
 
+## Provider Proxy Preview
+
+Virtual secrets keep real values out of the agent context. Provider proxy mode goes one step further for tools and SDKs that honor `OPENAI_BASE_URL`: the agent gets a virtual key and a local base URL, while AgentSecure injects the real key only when forwarding to the configured provider.
+
+Configure OpenAI from `agentsecure.json.provider_catalog.openai`:
+
+```bash
+agentsecure proxy setup openai
+```
+
+Then run the agent:
+
+```bash
+agentsecure run --protect-all -- codex
+```
+
+The agent-visible environment includes:
+
+```text
+OPENAI_API_KEY=virt_openai_...
+OPENAI_BASE_URL=http://127.0.0.1:8765/providers/openai/v1
+```
+
+AgentSecure forwards provider calls to the configured upstream:
+
+```json
+{
+  "provider_proxy": {
+    "providers": {
+      "openai": {
+        "upstream": "https://api.openai.com",
+        "local_path": "/providers/openai"
+      }
+    }
+  }
+}
+```
+
+Run the proxy proof:
+
+```bash
+agentsecure receipts --proxy
+```
+
+Provider proxy mode is local-only. It is not a system-wide proxy, not TLS MITM, and not browser-wide interception. Tools must use the provider base URL environment variable.
+
 ## What It Demonstrates
 
 - Discover likely secrets in `.env` files and environment variables.
@@ -130,6 +176,9 @@ agentsecure suggest
 agentsecure env
 agentsecure keys list
 agentsecure network list
+agentsecure proxy setup openai
+agentsecure proxy doctor
+agentsecure receipts --proxy
 ```
 
 Run an agent or command through local command guard:

@@ -9,6 +9,7 @@ WORKDIR=${1:-"$(mktemp -d)"}
 pass_count=0
 risk_count=0
 fail_count=0
+skip_count=0
 
 print_result() {
   status="$1"
@@ -34,6 +35,11 @@ risk() {
 fail() {
   fail_count=$((fail_count + 1))
   print_result "FAIL" "$1" "$2" "$3"
+}
+
+skip() {
+  skip_count=$((skip_count + 1))
+  print_result "SKIP" "$1" "$2" "$3"
 }
 
 contains() {
@@ -127,6 +133,8 @@ if contains "$out" "OPENAI_API_KEY=virt_openai_" &&
   not_contains "$out" "sk-demo-local-secret-do-not-use" &&
   not_contains "$out" "postgres://demo:demo-password@example.invalid/app"; then
   pass "A5" "workspace copy python read" "workspace copy mode exposes sanitized .env"
+elif contains "$out" "gateway failed to start"; then
+  skip "A5" "workspace copy python read" "localhost gateway bind is blocked in this environment"
 else
   fail "A5" "workspace copy python read" "workspace copy mode did not sanitize as expected"
 fi
@@ -136,11 +144,13 @@ if contains "$out" "FileNotFoundError" &&
   not_contains "$out" "sk-demo-local-secret-do-not-use" &&
   not_contains "$out" "postgres://demo:demo-password@example.invalid/app"; then
   pass "A6" "workspace copy relative traversal" "relative traversal did not reach original .env"
+elif contains "$out" "gateway failed to start"; then
+  skip "A6" "workspace copy relative traversal" "localhost gateway bind is blocked in this environment"
 else
   fail "A6" "workspace copy relative traversal" "relative traversal reached original .env or did not fail closed"
 fi
 
-printf "\nSummary: %s passed, %s known risks, %s failed\n" "$pass_count" "$risk_count" "$fail_count"
+printf "\nSummary: %s passed, %s known risks, %s failed, %s skipped\n" "$pass_count" "$risk_count" "$fail_count" "$skip_count"
 
 if [ "$fail_count" -gt 0 ]; then
   exit 1

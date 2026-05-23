@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sys
 import tempfile
@@ -135,6 +136,101 @@ class WorkspaceRuntimeIntegrationTest(unittest.TestCase):
 
             with open(os.path.join(temp_dir, ".env"), "r") as handle:
                 self.assertIn(real_secret, handle.read())
+
+    def test_run_strips_backing_secret_env_from_child_and_subprocess(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            with open(config_path, "w") as handle:
+                json.dump(
+                    {
+                        "secrets": [
+                            {
+                                "env_name": "OPENAI_API_KEY",
+                                "virtual_token": "virt_openai_backing",
+                                "real_secret_env": "AGENTSECURE_REAL_OPENAI_KEY",
+                                "provider": "openai",
+                            }
+                        ],
+                        "env_policy": {
+                            "OPENAI_API_KEY": {"mode": "virtualize"},
+                        },
+                        "network": {"allow_domains": ["api.openai.com"]},
+                    },
+                    handle,
+                )
+
+            result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "run",
+                    "--no-discover",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os, subprocess, sys; "
+                        "assert os.environ.get('OPENAI_API_KEY') == 'virt_openai_backing'; "
+                        "assert 'AGENTSECURE_REAL_OPENAI_KEY' not in os.environ; "
+                        "subprocess.check_call([sys.executable, '-c', "
+                        "'import os; assert \"AGENTSECURE_REAL_OPENAI_KEY\" not in os.environ'])"
+                    ),
+                ],
+                cwd=temp_dir,
+                env={"AGENTSECURE_REAL_OPENAI_KEY": "sk-real-backing-secret"},
+            )
+
+            if result.returncode != 0 and "gateway failed to start" in result.stderr:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_workspace_no_discover_rewrites_dotenv_from_configured_binding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            real_secret = "sk-configured-no-discover-secret"
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            with open(os.path.join(temp_dir, ".env"), "w") as handle:
+                handle.write("OPENAI_API_KEY=%s\n" % real_secret)
+            create = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "keys",
+                    "create",
+                    "--env-name",
+                    "OPENAI_API_KEY",
+                    "--provider",
+                    "openai",
+                    "--real-secret-env",
+                    "AGENTSECURE_TEST_OPENAI_KEY",
+                ],
+                cwd=temp_dir,
+                env={"AGENTSECURE_TEST_OPENAI_KEY": real_secret},
+            )
+            self.assertEqual(0, create.returncode, create.stderr)
+
+            result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "run",
+                    "--runtime",
+                    "workspace",
+                    "--workspace-mode",
+                    "copy",
+                    "--no-discover",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "print(open('.env').read(), end='')",
+                ],
+                cwd=temp_dir,
+            )
+
+            if result.returncode != 0 and "gateway failed to start" in result.stderr:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("OPENAI_API_KEY=virt_openai_", result.stdout)
+            self.assertNotIn(real_secret, result.stdout)
 
 
 if __name__ == "__main__":

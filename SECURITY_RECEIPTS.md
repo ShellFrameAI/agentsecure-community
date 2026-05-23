@@ -20,6 +20,12 @@ Run adversarial read-bypass checks:
 bash examples/security-receipts/run_adversarial_receipts.sh
 ```
 
+Run provider proxy receipts:
+
+```bash
+agentsecure receipts --proxy
+```
+
 The script creates a temporary project with fake secrets only.
 
 If your environment blocks localhost binds, the network receipt may fail because the local AgentSecure gateway cannot start. Run it from a normal shell, not a restricted sandbox.
@@ -45,6 +51,41 @@ Each receipt records:
 | R3 | network exfil with credential | block | credential-bearing `curl` to non-allowlisted host exits before provider call |
 | R4 | direct destructive command | block | direct `rm` is denied when process allowlist is configured |
 | R5 | workspace copy mode | isolate | writes happen in a safe workspace; real project `.env` is unchanged |
+
+## Provider Proxy Receipts
+
+Provider proxy receipts prove the local provider-boundary behavior without calling a real provider.
+
+| ID | Fixture | Expected Decision | Expected Evidence |
+| --- | --- | --- | --- |
+| P1 | approved provider path | inject | upstream receives the real test key |
+| P2 | virtual key forwarding | sanitize | upstream does not receive the `virt_...` token |
+| P3 | client output | sanitize | client-visible output excludes the real key |
+| P4 | scrubbed body forwarding | sanitize | forwarded `Content-Length` matches the scrubbed body |
+| P5 | disallowed provider path | block | response is `agentsecure_policy_denied` |
+| P6 | agent retry guidance | block | response says this is not auth failure and not to retry |
+
+Provider proxy mode is configured in `agentsecure.json`:
+
+```json
+{
+  "provider_proxy": {
+    "enabled": true,
+    "providers": {
+      "openai": {
+        "env_name": "OPENAI_API_KEY",
+        "base_url_env": "OPENAI_BASE_URL",
+        "upstream": "https://api.openai.com",
+        "local_path": "/providers/openai",
+        "inject_as": "authorization_bearer",
+        "allow_paths": ["/v1/"]
+      }
+    }
+  }
+}
+```
+
+The agent sees `OPENAI_API_KEY=virt_openai_...` and `OPENAI_BASE_URL=http://127.0.0.1:8765/providers/openai/v1`. AgentSecure injects the real local key only when forwarding to the configured upstream.
 
 ## Adversarial Findings
 
@@ -253,6 +294,8 @@ Known limits:
 - command-guard mode sanitizes common reads but is not a kernel-level boundary
 - direct process allowlisting does not inspect every nested shell subcommand
 - network preflight currently covers common CLI paths such as `curl` and `wget`
+- provider proxy requires tools to use the configured local base URL
+- provider proxy is not system-wide traffic interception and does not perform TLS MITM
 - determined untrusted code should still run in containers, no-network defaults, read-only mounts, or OS sandboxing
 
 Recommended stronger setup:

@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 from agentsecure.core.config import JsonConfigWriter
 from agentsecure.core.models import SecretGrant
+from agentsecure.core.product import default_config
 from agentsecure.core.time import DEFAULT_TTL_SECONDS, now_seconds, parse_duration_seconds
 from agentsecure.interfaces.audit import AuditLogger
 from agentsecure.interfaces.grants import GrantStore
@@ -102,25 +103,7 @@ class KeyManagementService:
 
     def _load_or_default_config(self) -> Dict[str, Any]:
         if not os.path.exists(self._config_path):
-            return {
-                "secrets": [],
-                "env_policy": {},
-                "network": {
-                    "allow_domains": [
-                        "api.openai.com",
-                        "api.anthropic.com",
-                        "chatgpt.com",
-                        "*.chatgpt.com",
-                    ],
-                    "deny_domains": [],
-                    "allow_ports": [80, 443],
-                    "deny_ip_literals": True,
-                    "deny_private_networks": True,
-                },
-                "process": {"allowed_commands": []},
-                "gateway": {"host": "127.0.0.1", "port": 8765},
-                "audit": {"path": ".agentsecure/audit.log"},
-            }
+            return default_config()
         with open(self._config_path, "r") as handle:
             data = json.load(handle)
         if not isinstance(data, dict):

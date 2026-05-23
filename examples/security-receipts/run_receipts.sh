@@ -127,6 +127,8 @@ if command -v curl >/dev/null 2>&1; then
   rc=$?
   if [ "$rc" -eq 126 ] && contains "$out" "blocked credential-bearing request"; then
     pass "R3" "network exfil" "credential-bearing request blocked before provider call"
+  elif contains "$out" "gateway failed to start"; then
+    skip "R3" "network exfil" "localhost gateway bind is blocked in this environment"
   else
     fail "R3" "network exfil" "expected exit 126 and policy block message"
   fi
@@ -157,6 +159,8 @@ out="$(run_as_string run --runtime workspace --workspace-mode copy --workspace-k
 after="$(cat .env)"
 if [ "$before" = "$after" ] && contains "$out" "Real project files were not modified."; then
   pass "R5" "workspace copy isolation" "real project .env unchanged"
+elif contains "$out" "gateway failed to start"; then
+  skip "R5" "workspace copy isolation" "localhost gateway bind is blocked in this environment"
 else
   fail "R5" "workspace copy isolation" "real project .env changed or workspace mode did not run as expected"
 fi

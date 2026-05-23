@@ -18,6 +18,12 @@ class ProductServiceTest(unittest.TestCase):
                 self.assertTrue(result["config_created"])
                 self.assertTrue(os.path.exists("agentsecure.json"))
                 self.assertTrue(os.path.exists(os.path.join(".agentsecure", ".gitignore")))
+                with open("agentsecure.json", "r") as handle:
+                    config = json.load(handle)
+                self.assertEqual(
+                    "https://api.openai.com",
+                    config["provider_catalog"]["openai"]["upstream"],
+                )
             finally:
                 os.chdir(cwd)
 

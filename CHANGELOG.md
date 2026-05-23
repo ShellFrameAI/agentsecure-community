@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 - 2026-05-23
+
+- Added config-driven provider proxy setup for OpenAI.
+- Added provider proxy receipts with proof that virtual keys are not forwarded upstream.
+- Added agent-friendly policy denial JSON for provider proxy blocks.
+- Hardened provider proxy path validation, response sanitization, request framing, and config validation.
+- Added provider proxy docs and example config.
+
 ## 0.1.2 - 2026-05-21
 
 - Added parent-process stdout/stderr sanitization for `agentsecure run`.
