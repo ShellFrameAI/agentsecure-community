@@ -4,6 +4,7 @@ import os
 import shutil
 
 from agentsecure.cli.common import scanner
+from agentsecure.core.agentsecure_md import AGENTSECURE_MD
 from agentsecure.core.product import ProductService
 from agentsecure.workspace.materializer import make_tree_writable
 
@@ -32,6 +33,14 @@ def show_status(args: argparse.Namespace) -> int:
         return 0
     print("AgentSecure status")
     print("Config: %s (%s)" % (result["config_path"], "found" if result["config_exists"] else "missing"))
+    agentsecure_md = result.get("agentsecure_md", {})
+    print(
+        "AGENTSECURE.md: %s (%s)"
+        % (
+            agentsecure_md.get("path", AGENTSECURE_MD),
+            "valid" if agentsecure_md.get("exists") and agentsecure_md.get("ok") else "missing" if not agentsecure_md.get("exists") else "needs review",
+        )
+    )
     print("Configured secrets: %s" % result["configured_secrets"])
     print("Discovered secrets: %s" % result["discovered_secrets"])
     grants = result["grants"]

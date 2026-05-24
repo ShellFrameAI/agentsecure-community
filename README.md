@@ -50,10 +50,16 @@ Why:
 
 ## Quickstart In A Project
 
-Create a local config:
+Create a local config and repo guidance file:
 
 ```bash
 agentsecure init
+```
+
+This creates `agentsecure.json`, local private state under `.agentsecure/`, and `AGENTSECURE.md`. Review the Markdown file before running agents:
+
+```bash
+agentsecure policy validate
 ```
 
 Create a fake `.env` for testing:
@@ -140,7 +146,7 @@ Command-guard mode is a usability guard, not a hard sandbox. A determined proces
 
 ## Example Policy
 
-See [examples/agentsecure.community.json](examples/agentsecure.community.json) and [examples/.env.example](examples/.env.example).
+See [examples/agentsecure.community.json](examples/agentsecure.community.json), [examples/AGENTSECURE.md](examples/AGENTSECURE.md), and [examples/.env.example](examples/.env.example).
 
 Minimal policy shape:
 
@@ -169,6 +175,7 @@ Minimal policy shape:
 
 ```bash
 agentsecure init
+agentsecure policy validate
 agentsecure status
 agentsecure doctor
 agentsecure discover
@@ -242,6 +249,12 @@ python3 scripts/secret_scan.py .
 ```
 
 CI runs tests across supported Python versions and runs the local secret scan.
+
+## AGENTSECURE.md
+
+`AGENTSECURE.md` is a small repo-level policy guidance file for humans and AI coding agents. In the community release, AgentSecure creates it and validates that it does not contain raw secrets or unsupported raw-secret passthrough modes.
+
+Supported community secret modes in the Markdown guidance are `virtualize` and `deny`. Do not use `allow` or `allow_real` for secrets. The Markdown file is guidance plus local validation; it is not a full sandbox by itself.
 
 ## Public Release Boundary
 

@@ -5,6 +5,7 @@ import socket
 import stat
 from typing import Any, Dict, List
 
+from agentsecure.core.agentsecure_md import AGENTSECURE_MD, agentsecure_md_status, ensure_agentsecure_md
 from agentsecure.core.config import JsonConfigWriter
 from agentsecure.core.config_profiles import profile_metadata
 from agentsecure.core.time import now_seconds
@@ -54,11 +55,18 @@ class ProductService:
                 handle.write("*\n!.gitignore\n")
             created.append(gitignore_path)
 
+        agentsecure_md = ensure_agentsecure_md(AGENTSECURE_MD, force)
+        if agentsecure_md["created"] or agentsecure_md["overwritten"]:
+            created.append(agentsecure_md["path"])
+
         return {
             "config_path": self.config_path,
             "config_created": config_created,
+            "agentsecure_md": agentsecure_md,
             "created": created,
             "next_steps": [
+                "review AGENTSECURE.md",
+                "agentsecure policy validate",
                 "agentsecure discover",
                 "agentsecure run --protect-all -- <agent-command>",
                 "agentsecure status",
@@ -85,6 +93,7 @@ class ProductService:
         return {
             "config_path": self.config_path,
             "config_exists": os.path.exists(self.config_path),
+            "agentsecure_md": agentsecure_md_status(AGENTSECURE_MD),
             "configured_secrets": len(config.get("secrets", [])) if config else 0,
             "discovered_secrets": len(discoveries),
             "grants": {
@@ -106,6 +115,13 @@ class ProductService:
     def doctor(self) -> Dict[str, Any]:
         checks = []
         checks.append(self._check("config_exists", os.path.exists(self.config_path), self.config_path))
+        agentsecure_md = agentsecure_md_status(AGENTSECURE_MD)
+        checks.append(self._check("agentsecure_md_exists", agentsecure_md["exists"], AGENTSECURE_MD))
+        if agentsecure_md["exists"]:
+            detail = "AGENTSECURE.md policy guidance is valid"
+            if not agentsecure_md["ok"]:
+                detail = "; ".join(error["message"] for error in agentsecure_md["errors"]) or AGENTSECURE_MD
+            checks.append(self._check("agentsecure_md_valid", agentsecure_md["ok"], detail))
         checks.append(self._check("agentsecure_dir_exists", os.path.isdir(".agentsecure"), ".agentsecure"))
         checks.append(
             self._check(

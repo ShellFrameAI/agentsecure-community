@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 - 2026-05-24
+
+- Added `AGENTSECURE.md` creation during `agentsecure init`.
+- Added `agentsecure policy validate` for local repo guidance validation.
+- Added status and doctor checks for `AGENTSECURE.md`.
+- Rejected raw secrets, private keys, `allow`, and `allow_real` in AGENTSECURE.md guidance.
+
 ## 0.1.3 - 2026-05-23
 
 - Added config-driven provider proxy setup for OpenAI.
