@@ -12,25 +12,45 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             init_result = run_agentsecure(["init"], cwd=temp_dir)
             self.assertEqual(0, init_result.returncode, init_result.stderr)
             self.assertIn("Initialized AgentSecure", init_result.stdout)
+            self.assertIn("review AGENTSECURE.md", init_result.stdout)
+            self.assertIn("agentsecure policy validate", init_result.stdout)
             self.assertIn("agentsecure discover", init_result.stdout)
             self.assertIn("agentsecure run --protect-all -- <agent-command>", init_result.stdout)
             self.assertIn("agentsecure status", init_result.stdout)
             self.assertNotIn("agentsecure api", init_result.stdout)
             self.assertTrue(os.path.exists(os.path.join(temp_dir, "agentsecure.json")))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "AGENTSECURE.md")))
             self.assertTrue(os.path.exists(os.path.join(temp_dir, ".agentsecure", ".gitignore")))
 
             status_result = run_agentsecure(["status"], cwd=temp_dir)
             self.assertEqual(0, status_result.returncode, status_result.stderr)
+            self.assertIn("AGENTSECURE.md: AGENTSECURE.md (valid)", status_result.stdout)
             self.assertIn("Configured secrets: 0", status_result.stdout)
+
+            validate_result = run_agentsecure(["policy", "validate"], cwd=temp_dir)
+            self.assertEqual(0, validate_result.returncode, validate_result.stderr)
+            self.assertIn('"ok": true', validate_result.stdout)
 
             doctor_result = run_agentsecure(["doctor"], cwd=temp_dir)
             self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
             self.assertIn("[OK] config_exists", doctor_result.stdout)
+            self.assertIn("[OK] agentsecure_md_valid", doctor_result.stdout)
+
+            with open(os.path.join(temp_dir, "AGENTSECURE.md"), "a", encoding="utf-8") as handle:
+                handle.write("\nDATABASE_URL_DEV:\n  mode: allow\n")
+            invalid_result = run_agentsecure(["policy", "validate"], cwd=temp_dir)
+            self.assertEqual(1, invalid_result.returncode, invalid_result.stderr)
+            self.assertIn('"code": "allow"', invalid_result.stdout)
+
+            doctor_result = run_agentsecure(["doctor"], cwd=temp_dir)
+            self.assertEqual(1, doctor_result.returncode, doctor_result.stderr)
+            self.assertIn("[FAIL] agentsecure_md_valid", doctor_result.stdout)
 
             cleanup_result = run_agentsecure(["cleanup", "--yes"], cwd=temp_dir)
             self.assertEqual(0, cleanup_result.returncode, cleanup_result.stderr)
             self.assertFalse(os.path.exists(os.path.join(temp_dir, "agentsecure.json")))
             self.assertFalse(os.path.exists(os.path.join(temp_dir, ".agentsecure")))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "AGENTSECURE.md")))
 
     def test_files_protect_list_and_unprotect(self):
         with tempfile.TemporaryDirectory() as temp_dir:

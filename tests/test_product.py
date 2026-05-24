@@ -16,7 +16,9 @@ class ProductServiceTest(unittest.TestCase):
                 service = ProductService("agentsecure.json", CompositeSecretScanner([]))
                 result = service.init_project()
                 self.assertTrue(result["config_created"])
+                self.assertTrue(result["agentsecure_md"]["created"])
                 self.assertTrue(os.path.exists("agentsecure.json"))
+                self.assertTrue(os.path.exists("AGENTSECURE.md"))
                 self.assertTrue(os.path.exists(os.path.join(".agentsecure", ".gitignore")))
                 with open("agentsecure.json", "r") as handle:
                     config = json.load(handle)

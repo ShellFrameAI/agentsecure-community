@@ -2,6 +2,7 @@ import argparse
 import json
 import sys
 
+from agentsecure.core.agentsecure_md import AGENTSECURE_MD, validate_agentsecure_md
 from agentsecure.core.config import ConfigError
 from agentsecure.core.policy_mutation import LocalPolicyMutationService
 
@@ -14,11 +15,17 @@ def add_policy_subparser(subparsers) -> None:
     policy_preview_parser.add_argument("--json-file", help="Read mutation JSON from this file instead of stdin")
     policy_apply_parser = policy_subparsers.add_parser("apply-local", help="Apply local policy changes from JSON")
     policy_apply_parser.add_argument("--json-file", help="Read mutation JSON from this file instead of stdin")
+    validate_parser = policy_subparsers.add_parser("validate", help="Validate AGENTSECURE.md policy guidance")
+    validate_parser.add_argument("--file", default=AGENTSECURE_MD, help="AGENTSECURE.md path")
 
 
 def handle_policy(args: argparse.Namespace) -> int:
-    service = LocalPolicyMutationService(args.config)
     try:
+        if args.policy_command == "validate":
+            payload = validate_agentsecure_md(args.file)
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0 if payload["ok"] else 1
+        service = LocalPolicyMutationService(args.config)
         if args.policy_command == "review":
             payload = service.review()
         elif args.policy_command == "preview":

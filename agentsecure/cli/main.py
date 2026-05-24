@@ -14,6 +14,7 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 
+from agentsecure import __version__
 from agentsecure.cloud import CloudError, CloudRuntimeService
 from agentsecure.api.server import LocalApiServer
 from agentsecure.api.services import ApiServices
@@ -49,6 +50,7 @@ from agentsecure.cli.settings import (
     handle_setup,
 )
 from agentsecure.client.wrappers import AgentWrapperInstaller, SUPPORTED_AGENTS
+from agentsecure.core.agentsecure_md import AGENTSECURE_MD, agentsecure_md_status
 from agentsecure.core.command_metadata import safe_command_metadata
 from agentsecure.core.config import ConfigError, JsonConfigLoader, JsonConfigWriter
 from agentsecure.core.config_profiles import (
@@ -145,6 +147,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentsecure")
+    parser.add_argument("--version", action="version", version="agentsecure %s" % __version__)
     parser.add_argument(
         "--config",
         default="agentsecure.json",
@@ -264,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_agent(args: argparse.Namespace) -> int:
+    policy_doc = agentsecure_md_status(AGENTSECURE_MD)
+    if policy_doc.get("exists"):
+        state = "valid" if policy_doc.get("ok") else "needs review"
+        print("AgentSecure policy guidance: %s (%s)" % (AGENTSECURE_MD, state), flush=True)
     cloud = CloudRuntimeService() if _cloud_features_enabled() else None
     if cloud:
         _apply_cloud_runtime_defaults(args, cloud)
