@@ -29,7 +29,8 @@ export PATH="$(python3 -m site --user-base)/bin:$PATH"
 agentsecure demo
 ```
 
-Use a virtual environment if you want to keep it isolated:
+You do not need a virtual environment to run AgentSecure. Use one only if you
+want the install isolated to this project:
 
 ```bash
 python3 -m venv .venv
@@ -37,6 +38,12 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install agentsecure
 agentsecure demo
+```
+
+Then run your agent:
+
+```bash
+python3 -m agentsecure run claude
 ```
 
 ## What The Demo Shows

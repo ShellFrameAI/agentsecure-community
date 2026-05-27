@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 - 2026-05-27
+
+- Clarified that virtual environments are optional in the install instructions.
+- Added the direct `python3 -m agentsecure run claude` command to the install quickstart.
+
 ## 0.1.5 - 2026-05-27
 
 - Preserved terminal attachment for bare interactive agent launches such as `agentsecure run -- claude`.
