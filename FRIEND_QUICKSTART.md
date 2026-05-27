@@ -16,7 +16,14 @@ python -m pip install --upgrade agentsecure
 Check:
 
 ```bash
-agentsecure --help
+python -m agentsecure --help
+```
+
+If you prefer the shorter `agentsecure` command outside a virtual environment,
+make sure Python's user script directory is on your shell path:
+
+```bash
+export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
 ## 2. Init

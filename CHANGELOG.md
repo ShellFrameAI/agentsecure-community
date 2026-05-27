@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5 - 2026-05-27
+
+- Preserved terminal attachment for bare interactive agent launches such as `agentsecure run -- claude`.
+- Suppressed internal gateway request tracebacks during guarded agent runs.
+- Documented `python -m agentsecure` usage for installs where the user script directory is not on `PATH`.
+
 ## 0.1.4 - 2026-05-24
 
 - Added `AGENTSECURE.md` creation during `agentsecure init`.

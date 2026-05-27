@@ -15,7 +15,17 @@ The community release is intentionally scoped to local CLI, local command guard,
 ## Install
 
 ```bash
-python3 -m pip install agentsecure
+python3 -m pip install --upgrade agentsecure
+python3 -m agentsecure demo
+```
+
+`python3 -m agentsecure` works even when `pip` installs the `agentsecure`
+executable into a user script directory that is not on your `PATH`. If you want
+the shorter `agentsecure` command, add Python's user script directory to your
+shell path:
+
+```bash
+export PATH="$(python3 -m site --user-base)/bin:$PATH"
 agentsecure demo
 ```
 
@@ -191,10 +201,14 @@ agentsecure receipts --proxy
 Run an agent or command through local command guard:
 
 ```bash
-agentsecure run --protect-all -- codex
-agentsecure run --protect-all -- claude
-agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
+python3 -m agentsecure run --protect-all -- codex
+python3 -m agentsecure run --protect-all -- claude
+python3 -m agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
 ```
+
+Bare interactive agent launches keep the terminal attached so tools such as
+Claude Code can open normally. Non-interactive commands are still output
+sanitized by AgentSecure.
 
 Use workspace copy mode when you want review-before-apply:
 

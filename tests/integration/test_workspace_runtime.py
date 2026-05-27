@@ -1,14 +1,93 @@
 import os
 import json
+import pty
 import re
+import select
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from tests.integration.helpers import run_agentsecure
 
 
 class WorkspaceRuntimeIntegrationTest(unittest.TestCase):
+    def test_bare_interactive_agent_keeps_tty_attached(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bin_dir = os.path.join(temp_dir, "bin")
+            os.makedirs(bin_dir)
+            fake_claude = os.path.join(bin_dir, "claude")
+            with open(fake_claude, "w") as handle:
+                handle.write(
+                    "#!/usr/bin/env python3\n"
+                    "import sys\n"
+                    "if not (sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()):\n"
+                    "    print('stdio is not a tty', file=sys.stderr)\n"
+                    "    raise SystemExit(42)\n"
+                    "print('tty ok')\n"
+                )
+            os.chmod(fake_claude, 0o755)
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            with open(config_path, "w") as handle:
+                json.dump({}, handle)
+
+            command = [
+                sys.executable,
+                "-m",
+                "agentsecure",
+                "--config",
+                config_path,
+                "run",
+                "--no-discover",
+                "--",
+                "claude",
+            ]
+            env = os.environ.copy()
+            env["PYTHONPATH"] = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")) + os.pathsep + env.get("PYTHONPATH", "")
+            env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+
+            master_fd, slave_fd = pty.openpty()
+            process = subprocess.Popen(
+                command,
+                cwd=temp_dir,
+                env=env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            output = b""
+            deadline = time.time() + 10
+            try:
+                while time.time() < deadline:
+                    readable, _, _ = select.select([master_fd], [], [], 0.1)
+                    if readable:
+                        try:
+                            chunk = os.read(master_fd, 4096)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        output += chunk
+                    if process.poll() is not None:
+                        readable, _, _ = select.select([master_fd], [], [], 0)
+                        if not readable:
+                            break
+                if process.poll() is None:
+                    process.kill()
+                    self.fail("agentsecure run did not exit")
+            finally:
+                os.close(master_fd)
+
+            text = output.decode("utf-8", "replace")
+            if process.returncode != 0 and "gateway failed to start" in text:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, process.returncode, text)
+            self.assertIn("AgentSecure interactive terminal mode", text)
+            self.assertIn("tty ok", text)
+
     def test_run_uses_safe_workspace_with_rewritten_dotenv(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             real_secret = "sk-workspace-real-secret"

@@ -568,6 +568,10 @@ class LocalGateway:
                 ready_callback()
             server.serve_forever()
 
+    def shutdown(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+
     def _handler_class(self):
         class BoundGatewayRequestHandler(GatewayRequestHandler):
             pass
@@ -585,3 +589,6 @@ class LocalGateway:
 class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def handle_error(self, request, client_address) -> None:
+        return
