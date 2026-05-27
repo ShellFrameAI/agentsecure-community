@@ -2,6 +2,7 @@ import unittest
 import socket
 from io import StringIO
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 from agentsecure.cli.main import (
     _apply_proxy_environment,
@@ -11,6 +12,7 @@ from agentsecure.cli.main import (
     build_parser,
     _merge_no_proxy,
     _proxy_url,
+    _should_preserve_interactive_tty,
 )
 from agentsecure.core.models import AgentSecureConfig, SecretBinding
 
@@ -116,6 +118,18 @@ class CliTest(unittest.TestCase):
             self.assertNotEqual(busy_port, selected)
         finally:
             sock.close()
+
+    def test_preserves_tty_for_bare_interactive_agent(self):
+        with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
+            self.assertTrue(_should_preserve_interactive_tty(["claude"]))
+
+    def test_does_not_preserve_tty_for_regular_commands(self):
+        with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
+            self.assertFalse(_should_preserve_interactive_tty(["cat", ".env"]))
+
+    def test_does_not_preserve_tty_when_agent_has_arguments(self):
+        with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
+            self.assertFalse(_should_preserve_interactive_tty(["claude", "--print", "hello"]))
 
 
 if __name__ == "__main__":

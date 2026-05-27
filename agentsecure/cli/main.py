@@ -85,6 +85,19 @@ from agentsecure.workspace.diff import WorkspaceDiff
 from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_writable
 
 
+INTERACTIVE_AGENT_COMMANDS = set(SUPPORTED_AGENTS)
+
+
+class LocalGatewayHandle:
+    def __init__(self, gateway: LocalGateway, thread: threading.Thread) -> None:
+        self.gateway = gateway
+        self.thread = thread
+
+    def shutdown(self) -> None:
+        self.gateway.shutdown()
+        self.thread.join(timeout=2)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -338,7 +351,7 @@ def run_agent(args: argparse.Namespace) -> int:
 
     daemon = _running_daemon()
     daemon_session = None
-    gateway_thread = None
+    gateway_handle = None
     if daemon:
         daemon_session = _daemon_create_session(
             daemon,
@@ -357,9 +370,9 @@ def run_agent(args: argparse.Namespace) -> int:
     else:
         gateway_host = container.config.gateway.host
         gateway_port = _available_gateway_port(gateway_host, container.config.gateway.port)
-        gateway_thread = _start_local_gateway_thread(container, gateway_host, gateway_port)
-        if isinstance(gateway_thread, int):
-            return gateway_thread
+        gateway_handle = _start_local_gateway_thread(container, gateway_host, gateway_port)
+        if isinstance(gateway_handle, int):
+            return gateway_handle
 
     env = os.environ.copy()
     for env_name in container.config.env_policy.rules:
@@ -411,7 +424,13 @@ def run_agent(args: argparse.Namespace) -> int:
     session_finished = False
     try:
         output_sanitizer = SecretOutputSanitizer.from_config_path(args.config)
-        process = _start_agent_process(argv, env, run_cwd, sanitize_output=True)
+        preserve_tty = _should_preserve_interactive_tty(argv)
+        if preserve_tty:
+            print(
+                "AgentSecure interactive terminal mode: command output is not post-processed.",
+                flush=True,
+            )
+        process = _start_agent_process(argv, env, run_cwd, sanitize_output=not preserve_tty)
         process_group_id = _process_group_id(process)
         if cloud_session and cloud and cloud.status().get("enrolled"):
             command_executor = _run_command_executor(
@@ -465,6 +484,8 @@ def run_agent(args: argparse.Namespace) -> int:
         cloud_stop.set()
         if cloud_thread:
             cloud_thread.join(timeout=2)
+        if gateway_handle:
+            gateway_handle.shutdown()
         if workspace_session and not args.workspace_keep:
             materializer.make_writable(workspace_session.workspace_root)
             shutil.rmtree(workspace_session.workspace_root, ignore_errors=True)
@@ -487,6 +508,19 @@ def _start_agent_process(argv: List[str], env, cwd: str, sanitize_output: bool =
     if os.name == "posix":
         return subprocess.Popen(argv, env=env, cwd=cwd, stdout=stdout, stderr=stderr, preexec_fn=os.setsid)
     return subprocess.Popen(argv, env=env, cwd=cwd, stdout=stdout, stderr=stderr)
+
+
+def _should_preserve_interactive_tty(argv: List[str]) -> bool:
+    if not argv or not _stdio_is_tty():
+        return False
+    command = os.path.basename(argv[0])
+    if command not in INTERACTIVE_AGENT_COMMANDS:
+        return False
+    return len(argv) == 1
+
+
+def _stdio_is_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()
 
 
 def _wait_for_agent_process(process, sanitizer: SecretOutputSanitizer) -> int:
@@ -665,7 +699,7 @@ def _start_local_gateway_thread(container: Container, host: str, port: int):
     if isinstance(gateway_status, Exception):
         sys.stderr.write("agentsecure: gateway failed to start: %s\n" % gateway_status)
         return 1
-    return gateway_thread
+    return LocalGatewayHandle(gateway, gateway_thread)
 
 
 def _proxy_url(host: str, port: int, session_id: str = "") -> str:
