@@ -385,12 +385,15 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         return host in allowed_hosts
 
     def _provider_path_allowed(self, provider: ProviderProxyProvider, provider_path: str) -> bool:
-        path = urlsplit(provider_path).path or "/"
-        if self._has_unsafe_path_segment(path):
+        path = self._canonical_provider_path(urlsplit(provider_path).path or "/")
+        if path is None:
             return False
         allow_paths = provider.allow_paths or ["/"]
         for allow_path in allow_paths:
             normalized = allow_path if allow_path.startswith("/") else "/" + allow_path
+            normalized = self._canonical_provider_path(normalized)
+            if normalized is None:
+                continue
             if normalized == "/":
                 return True
             normalized = normalized.rstrip("/") + "/"
@@ -398,21 +401,29 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
                 return True
         return False
 
-    def _has_unsafe_path_segment(self, path: str) -> bool:
+    def _canonical_provider_path(self, path: str) -> Optional[str]:
+        decoded_segments = []
         for segment in path.split("/"):
             decoded = self._decode_segment(segment)
-            if decoded in (".", "..") or "/" in decoded or "\\" in decoded:
-                return True
-        return False
+            if decoded is None or decoded in (".", "..") or "/" in decoded or "\\" in decoded:
+                return None
+            decoded_segments.append(decoded)
+        canonical_path = "/".join(decoded_segments) or "/"
+        if not canonical_path.startswith("/"):
+            canonical_path = "/" + canonical_path
+        return canonical_path
 
-    def _decode_segment(self, segment: str) -> str:
+    def _has_unsafe_path_segment(self, path: str) -> bool:
+        return self._canonical_provider_path(path) is None
+
+    def _decode_segment(self, segment: str) -> Optional[str]:
         decoded = segment
-        for _ in range(3):
+        for _ in range(10):
             next_value = unquote(decoded)
             if next_value == decoded:
-                break
+                return decoded
             decoded = next_value
-        return decoded
+        return None if unquote(decoded) != decoded else decoded
 
     def _real_secret_for_provider(self, provider: ProviderProxyProvider) -> str:
         for binding in self.secret_bindings.values():

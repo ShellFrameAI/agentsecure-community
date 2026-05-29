@@ -159,6 +159,8 @@ class ProviderProxyGatewayTest(unittest.TestCase):
         self.assertFalse(handler._provider_path_allowed(provider, "/v1/%5c..%5cadmin"))
         self.assertFalse(handler._provider_path_allowed(provider, "/v1/%252e%252e/admin"))
         self.assertFalse(handler._provider_path_allowed(provider, "/v1/%252f..%252fadmin"))
+        self.assertFalse(handler._provider_path_allowed(provider, "/v1/%2525252e%2525252e/admin"))
+        self.assertFalse(handler._provider_path_allowed(provider, "/v1/%2525252f..%2525252fadmin"))
 
     def _handler(self, extra_headers=None, body=None):
         class TestHandler(GatewayRequestHandler):
