@@ -12,7 +12,6 @@ on:
         type: choice
         options:
           - testpypi
-          - pypi
 
 permissions:
   contents: read
@@ -62,7 +61,7 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.repository == 'pypi')
+    if: github.event_name == 'release'
     environment:
       name: pypi
       url: https://pypi.org/p/agentsecure
