@@ -31,6 +31,27 @@ class StrictDestinationValidatorTest(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual("network.no_credentials", decision.rule_id)
 
+    def test_denies_http_when_credentials_are_present(self):
+        validator = StrictDestinationValidator(
+            NetworkPolicy(
+                allow_domains=["api.openai.com"],
+                deny_private_networks=False,
+            )
+        )
+        decision = validator.validate(Destination("http", "api.openai.com", 80, credentials_present=True))
+        self.assertFalse(decision.allowed)
+        self.assertEqual("network.credentials_https", decision.rule_id)
+
+    def test_allows_http_when_credentials_are_absent(self):
+        validator = StrictDestinationValidator(
+            NetworkPolicy(
+                allow_domains=["downloads.example"],
+                deny_private_networks=False,
+            )
+        )
+        decision = validator.validate(Destination("http", "downloads.example", 80, credentials_present=False))
+        self.assertTrue(decision.allowed)
+
     def test_denies_ip_literal(self):
         validator = StrictDestinationValidator(NetworkPolicy(allow_domains=["1.1.1.1"]))
         decision = validator.validate(Destination("https", "1.1.1.1", 443))

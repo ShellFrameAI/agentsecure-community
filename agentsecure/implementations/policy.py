@@ -23,6 +23,11 @@ class StrictDestinationValidator(DestinationValidator):
         host = destination.host.lower().rstrip(".")
         if destination.port not in self._policy.allow_ports:
             return PolicyDecision.deny("port is not allowed", "network.port")
+        if destination.credentials_present and destination.scheme.lower() != "https":
+            return PolicyDecision.deny(
+                "credential-bearing requests must use HTTPS",
+                "network.credentials_https",
+            )
         if self._matches_any(host, self._policy.deny_domains):
             return PolicyDecision.deny("domain is explicitly denied", "network.deny_domain")
         if self._policy.deny_ip_literals and self._is_ip_literal(host):
