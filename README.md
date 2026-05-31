@@ -59,6 +59,12 @@ agentsecure run -- claude
 
 Use `--dry-run` to preview the import, or `--keep-file` if you want to store aliases without rewriting `.env`.
 
+To undo the rewrite and bring the original `.env` back from the latest private backup:
+
+```bash
+agentsecure secrets restore .env
+```
+
 For manual control, add one alias at a time:
 
 ```bash
@@ -81,6 +87,23 @@ What this does:
 - The fake token is revoked after the run.
 
 Do not put real secrets in project `.env` files. Use `.env` for non-secret config or fake placeholders that are safe for an agent to read.
+
+## Agent Run Guidance
+
+Every `agentsecure run` creates a small per-run guide under `.agentsecure/runs/` and prints its relative path:
+
+```text
+AgentSecure agent guide: .agentsecure/runs/run_.../AGENTSECURE_AGENT_GUIDE.md
+```
+
+The launched agent receives the absolute guide path in both `AGENTSECURE_AGENT_GUIDE` and `AGENTSECURE_SKILL_FILE`. The file contains only operational guidance and safe metadata, such as managed secret environment variable names, providers, and approved hosts from runtime alias bindings when available. It does not include raw secrets or virtual token values.
+
+Agents should use the injected environment variables and virtual tokens. They should not read `.env` to recover secrets or ask a human to paste secrets. If an expected secret env var is missing, ask the user to run:
+
+```bash
+agentsecure secrets import .env
+agentsecure secrets use <alias>
+```
 
 ## What The Demo Shows
 

@@ -64,6 +64,52 @@ class SecretAliasesCliTest(unittest.TestCase):
                     backup_text = handle.read()
                 self.assertIn(real_url, backup_text)
                 self.assertIn(real_key, backup_text)
+
+                restore_output = StringIO()
+                with redirect_stdout(restore_output):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "restore", ".env"]))
+                restore_result = json.loads(restore_output.getvalue())
+                self.assertTrue(restore_result["restored"])
+                self.assertEqual(result["backup"], restore_result["backup"])
+                with open(env_path, "r") as handle:
+                    restored_text = handle.read()
+                self.assertIn(real_url, restored_text)
+                self.assertIn(real_key, restored_text)
+                self.assertNotIn("AGENTSECURE_ALIAS_DATABASE_URL", restored_text)
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_restore_dotenv_dry_run_reports_latest_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            real_url = "postgres://user:password@dev.example.invalid/mydb"
+            with open(env_path, "w") as handle:
+                handle.write("DATABASE_URL=%s\n" % real_url)
+
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "import", ".env"]))
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "restore", ".env", "--dry-run"]))
+                result = json.loads(output.getvalue())
+                self.assertTrue(result["dry_run"])
+                self.assertTrue(result["would_restore"])
+                self.assertTrue(result["backup"].startswith(home_dir))
+                with open(env_path, "r") as handle:
+                    self.assertIn("AGENTSECURE_ALIAS_DATABASE_URL", handle.read())
             finally:
                 os.chdir(old_cwd)
                 if old_home is None:

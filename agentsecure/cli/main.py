@@ -56,6 +56,12 @@ from agentsecure.cli.settings import (
 )
 from agentsecure.client.wrappers import AgentWrapperInstaller, SUPPORTED_AGENTS
 from agentsecure.core.agentsecure_md import AGENTSECURE_MD, agentsecure_md_status
+from agentsecure.core.agent_guidance import (
+    ENV_AGENT_GUIDE,
+    ENV_SKILL_FILE,
+    relative_agent_guidance_path,
+    write_agent_guidance,
+)
 from agentsecure.core.command_metadata import safe_command_metadata
 from agentsecure.core.config import ConfigError, JsonConfigLoader, JsonConfigWriter
 from agentsecure.core.config_profiles import (
@@ -265,6 +271,10 @@ def build_parser() -> argparse.ArgumentParser:
     import_secret_parser.add_argument("--keep-file", action="store_true", help="Do not rewrite the dotenv file after importing")
     import_secret_parser.add_argument("--no-backup", action="store_true", help="Do not store a local backup before rewriting")
     import_secret_parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without writing changes")
+    restore_secret_parser = secrets_subparsers.add_parser("restore", help="Restore a dotenv file from the latest AgentSecure backup")
+    restore_secret_parser.add_argument("path", nargs="?", default=".env", help="Dotenv file to restore, default .env")
+    restore_secret_parser.add_argument("--backup", default="", help="Specific backup file to restore instead of the latest backup")
+    restore_secret_parser.add_argument("--dry-run", action="store_true", help="Show which backup would be restored")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -376,7 +386,8 @@ def run_agent(args: argparse.Namespace) -> int:
     runtime_bindings = alias_runtime_bindings
     container = Container.from_config_path(args.config, runtime_bindings=runtime_bindings, run_id=run_id)
     replacements.extend(_configured_secret_replacements(container, replacements))
-    run_cwd = os.getcwd()
+    source_root = os.getcwd()
+    run_cwd = source_root
     workspace_session = None
     materializer = WorkspaceMaterializer(_workspace_base_for_runtime(run_cwd, args.runtime))
     should_create_workspace = bool(replacements or container.config.files.protect_write)
@@ -462,6 +473,24 @@ def run_agent(args: argparse.Namespace) -> int:
         env[ENV_RUNTIME_BINDINGS] = serialize_runtime_bindings(runtime_bindings)
         env["AGENTSECURE_RUN_ID"] = run_id
         env["AGENTSECURE_PROJECT_ID"] = project_id
+    try:
+        agent_guide_path = write_agent_guidance(source_root, run_id, runtime_bindings)
+    except OSError as exc:
+        sys.stderr.write("agentsecure: failed to create agent guidance file: %s\n" % exc)
+        return 1
+    env[ENV_SKILL_FILE] = agent_guide_path
+    env[ENV_AGENT_GUIDE] = agent_guide_path
+    relative_guide_path = relative_agent_guidance_path(source_root, agent_guide_path)
+    container.audit_logger.record(
+        "agent_guidance_created",
+        {
+            "run_id": run_id,
+            "project_id": project_id,
+            "path": relative_guide_path,
+            "aliases": [binding.alias_id or binding.env_name for binding in runtime_bindings],
+        },
+    )
+    print("AgentSecure agent guide: %s" % relative_guide_path, flush=True)
     if args.runtime == "command-guard":
         CommandGuardWrapperInstaller(args.config).install(env)
     session_id = daemon_session.get("session_id", "") if daemon_session else ""
@@ -1160,6 +1189,8 @@ def handle_secret_aliases(args: argparse.Namespace) -> int:
         return use_secret_aliases(args)
     if args.secrets_command == "import":
         return import_secret_aliases(args)
+    if args.secrets_command == "restore":
+        return restore_dotenv_from_backup(args)
     sys.stderr.write("agentsecure: missing secrets subcommand\n")
     return 2
 
@@ -1363,6 +1394,48 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
     return 0
 
 
+def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
+    dotenv_path = os.path.abspath(args.path)
+    backup_path = os.path.abspath(args.backup) if args.backup else _latest_dotenv_backup(dotenv_path, args.config)
+    if not backup_path:
+        sys.stderr.write("agentsecure: no backup found for %s\n" % args.path)
+        return 2
+    if not os.path.exists(backup_path):
+        sys.stderr.write("agentsecure: backup file not found: %s\n" % backup_path)
+        return 2
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dotenv": args.path,
+                    "backup": backup_path,
+                    "would_restore": True,
+                    "dry_run": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    try:
+        shutil.copy2(backup_path, dotenv_path)
+    except OSError as exc:
+        sys.stderr.write("agentsecure: failed to restore dotenv file: %s\n" % exc)
+        return 1
+    print(
+        json.dumps(
+            {
+                "dotenv": args.path,
+                "backup": backup_path,
+                "restored": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def _alias_id_for_env_name(env_name: str) -> str:
     normalized = re.sub(r"[^a-z0-9._-]+", "_", str(env_name).strip().lower())
     normalized = normalized.strip("._-")
@@ -1416,6 +1489,23 @@ def _backup_dotenv_to_vault(dotenv_path: str, config_path: str) -> str:
     shutil.copy2(dotenv_path, backup_path)
     os.chmod(backup_path, 0o600)
     return backup_path
+
+
+def _latest_dotenv_backup(dotenv_path: str, config_path: str) -> str:
+    backup_dir = os.path.join(agentsecure_home(), "backups", project_id_for_path(config_path))
+    if not os.path.isdir(backup_dir):
+        return ""
+    prefix = os.path.basename(dotenv_path) + "."
+    candidates = []
+    for filename in os.listdir(backup_dir):
+        if filename.startswith(prefix) and filename.endswith(".bak"):
+            path = os.path.join(backup_dir, filename)
+            if os.path.isfile(path):
+                candidates.append(path)
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda path: (os.path.getmtime(path), path), reverse=True)
+    return candidates[0]
 
 
 def _rewrite_dotenv_with_alias_placeholders(dotenv_path: str, placeholders: Dict[str, str]) -> None:
