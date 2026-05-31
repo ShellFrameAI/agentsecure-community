@@ -5,7 +5,8 @@ from typing import Dict, List, Set, Tuple
 from agentsecure.core.capabilities import broker_url_for_env
 from agentsecure.core.config import JsonConfigLoader
 from agentsecure.core.models import SecretBinding
-from agentsecure.implementations.secret_store_factory import encrypted_secret_store_for_config
+from agentsecure.core.runtime_bindings import runtime_bindings_from_environment
+from agentsecure.implementations.secret_store_factory import encrypted_secret_store_for_config, encrypted_secret_store_for_vault
 from agentsecure.interfaces.key_store import SecretStore
 
 
@@ -27,10 +28,13 @@ class SecretOutputSanitizer:
         absolute_config = os.path.abspath(config_path)
         config = JsonConfigLoader().load(absolute_config)
         secret_store = encrypted_secret_store_for_config(absolute_config)
+        vault_store = encrypted_secret_store_for_vault()
         replacements = {}
         denied_values = set()
-        for binding in config.secrets:
-            real_value = cls._real_value(secret_store, binding)
+        runtime_bindings = runtime_bindings_from_environment()
+        for binding in list(config.secrets) + runtime_bindings:
+            store = vault_store if binding.alias_id else secret_store
+            real_value = cls._real_value(store, binding)
             if not real_value:
                 continue
             rule = config.env_policy.rule_for(binding.env_name)

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.request import Request, urlopen
 
@@ -36,6 +37,7 @@ from agentsecure.cli.project import (
 from agentsecure.cli.proxy import add_proxy_subparser, handle_proxy
 from agentsecure.cli.receipts import handle_receipts
 from agentsecure.cli.secrets import (
+    _read_real_secret,
     discover_secrets,
     handle_keys,
     print_env,
@@ -60,9 +62,16 @@ from agentsecure.core.config_profiles import (
 from agentsecure.core.capabilities import broker_url_for_env
 from agentsecure.core.container import Container
 from agentsecure.core.key_service import KeyManagementError, KeyManagementService
-from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretReplacement
+from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretBinding, SecretReplacement
 from agentsecure.core.provider_proxy import configured_provider_base_url, provider_base_local_path
 from agentsecure.core.product import ProductService
+from agentsecure.core.runtime_bindings import ENV_RUNTIME_BINDINGS, serialize_runtime_bindings
+from agentsecure.core.secret_aliases import (
+    SecretAliasError,
+    SecretAliasService,
+    local_secret_alias_store_for_home,
+    project_id_for_path,
+)
 from agentsecure.core.time import DurationError
 from agentsecure.daemon.commands import CommandExecutor, CommandPoller
 from agentsecure.daemon.policies import PolicyApplier
@@ -78,8 +87,12 @@ from agentsecure.guard.sanitizer import SecretOutputSanitizer
 from agentsecure.guard.wrappers import CommandGuardWrapperInstaller
 from agentsecure.gateway.proxy import LocalGateway
 from agentsecure.implementations.audit import JsonLineAuditLogger
-from agentsecure.implementations.grant_store import LocalJsonGrantStore
-from agentsecure.implementations.secret_store_factory import encrypted_secret_store_for_config
+from agentsecure.implementations.grant_store import LocalJsonGrantStore, local_grant_store_for_config
+from agentsecure.implementations.secret_store_factory import (
+    agentsecure_home,
+    encrypted_secret_store_for_config,
+    encrypted_secret_store_for_vault,
+)
 from agentsecure.workspace.apply import WorkspaceApplier
 from agentsecure.workspace.diff import WorkspaceDiff
 from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_writable
@@ -111,6 +124,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return print_env(args)
     if args.command == "keys":
         return handle_keys(args)
+    if args.command == "secrets":
+        return handle_secret_aliases(args)
     if args.command == "discover":
         return discover_secrets(args)
     if args.command == "suggest":
@@ -208,6 +223,22 @@ def build_parser() -> argparse.ArgumentParser:
     revoke_parser = keys_subparsers.add_parser("revoke", help="Revoke a virtual key")
     revoke_parser.add_argument("virtual_token")
 
+    secrets_parser = subparsers.add_parser("secrets", help="Manage central local secret aliases")
+    secrets_subparsers = secrets_parser.add_subparsers(dest="secrets_command")
+    add_secret_parser = secrets_subparsers.add_parser("add", help="Store a real secret once under a local alias")
+    add_secret_parser.add_argument("alias_id", help="Stable local alias, such as dev_db or facebook_app")
+    add_secret_parser.add_argument("--env-name", required=True, help="Environment variable exposed during runs")
+    add_secret_parser.add_argument("--provider", default="custom", help="Provider label")
+    add_secret_parser.add_argument("--inject-as", default="authorization_bearer", help="Credential injection mode")
+    add_secret_parser.add_argument("--name", default="", help="Human-readable alias label")
+    add_secret_parser.add_argument("--approved-host", action="append", default=[], help="Host allowed to receive this alias")
+    add_secret_parser.add_argument("--real-secret-env", help="Read the real secret from this local environment variable")
+    add_secret_parser.add_argument("--real-secret-stdin", action="store_true", help="Read the real secret from stdin")
+    secrets_subparsers.add_parser("list", help="List local secret aliases without printing secret values")
+    use_secret_parser = secrets_subparsers.add_parser("use", help="Assign aliases to this project")
+    use_secret_parser.add_argument("alias_ids", nargs="+")
+    use_secret_parser.add_argument("--project", default="", help="Project name for audit metadata")
+
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
     protect_parser = subparsers.add_parser("protect", help="Interactively virtualize discovered secrets")
@@ -280,6 +311,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_agent(args: argparse.Namespace) -> int:
+    run_id = "run_" + uuid.uuid4().hex[:16]
+    project_id = project_id_for_path(args.config)
     policy_doc = agentsecure_md_status(AGENTSECURE_MD)
     if policy_doc.get("exists"):
         state = "valid" if policy_doc.get("ok") else "needs review"
@@ -295,7 +328,26 @@ def run_agent(args: argparse.Namespace) -> int:
         replacements = protect_secrets(args)
         if isinstance(replacements, int):
             return replacements
-    container = Container.from_config_path(args.config)
+    if not os.path.exists(args.config):
+        ProductService(args.config, _scanner()).init_project()
+    try:
+        initial_config = JsonConfigLoader().load(args.config)
+    except FileNotFoundError:
+        initial_config = AgentSecureConfig()
+    alias_runtime_bindings = []
+    if initial_config.secret_aliases:
+        try:
+            alias_runtime_bindings = _secret_alias_service(args.config).prepare_run_bindings(
+                initial_config.secret_aliases,
+                args.ttl,
+                project_id,
+                run_id,
+            )
+        except (DurationError, SecretAliasError) as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
+    runtime_bindings = alias_runtime_bindings
+    container = Container.from_config_path(args.config, runtime_bindings=runtime_bindings, run_id=run_id)
     replacements.extend(_configured_secret_replacements(container, replacements))
     run_cwd = os.getcwd()
     workspace_session = None
@@ -349,7 +401,7 @@ def run_agent(args: argparse.Namespace) -> int:
         sys.stderr.write("agentsecure: missing agent command\n")
         return 2
 
-    daemon = _running_daemon()
+    daemon = None if runtime_bindings else _running_daemon()
     daemon_session = None
     gateway_handle = None
     if daemon:
@@ -379,6 +431,10 @@ def run_agent(args: argparse.Namespace) -> int:
         env.pop(env_name, None)
     _strip_backing_secret_environment(env, container)
     env.update(container.virtual_env_provider.build_environment())
+    if runtime_bindings:
+        env[ENV_RUNTIME_BINDINGS] = serialize_runtime_bindings(runtime_bindings)
+        env["AGENTSECURE_RUN_ID"] = run_id
+        env["AGENTSECURE_PROJECT_ID"] = project_id
     if args.runtime == "command-guard":
         CommandGuardWrapperInstaller(args.config).install(env)
     session_id = daemon_session.get("session_id", "") if daemon_session else ""
@@ -477,6 +533,8 @@ def run_agent(args: argparse.Namespace) -> int:
                 _execute_cloud_response_commands(cloud, command_executor, finish_response)
         return exit_code
     finally:
+        if runtime_bindings:
+            _revoke_runtime_bindings(args.config, runtime_bindings, run_id)
         if command_poller:
             command_poller.stop()
         if daemon and daemon_session and not session_finished:
@@ -500,6 +558,19 @@ def _workspace_base_for_runtime(source_root: str, runtime: str) -> str:
         return ".agentsecure/workspaces"
     digest = hashlib.sha256(os.path.abspath(source_root).encode("utf-8")).hexdigest()[:16]
     return os.path.join(tempfile.gettempdir(), "agentsecure-workspaces", digest)
+
+
+def _revoke_runtime_bindings(config_path: str, bindings: List[SecretBinding], run_id: str) -> None:
+    grant_store = local_grant_store_for_config(config_path)
+    revoked = []
+    for binding in bindings:
+        if grant_store.revoke(binding.virtual_token):
+            revoked.append(binding.alias_id or binding.env_name)
+    if revoked:
+        JsonLineAuditLogger(".agentsecure/audit.log").record(
+            "run_secret_revoked",
+            {"run_id": run_id, "secrets": revoked},
+        )
 
 
 def _start_agent_process(argv: List[str], env, cwd: str, sanitize_output: bool = False):
@@ -992,6 +1063,116 @@ def run_daemon(args: argparse.Namespace) -> int:
 def guard_command(args: argparse.Namespace) -> int:
     runner = GuardedCommandRunner(args.config)
     return runner.run(args.tool, list(args.tool_args))
+
+
+def handle_secret_aliases(args: argparse.Namespace) -> int:
+    if args.secrets_command == "add":
+        return add_secret_alias(args)
+    if args.secrets_command == "list":
+        return list_secret_aliases(args)
+    if args.secrets_command == "use":
+        return use_secret_aliases(args)
+    sys.stderr.write("agentsecure: missing secrets subcommand\n")
+    return 2
+
+
+def add_secret_alias(args: argparse.Namespace) -> int:
+    try:
+        real_secret = _read_real_secret(args)
+        alias = _secret_alias_service(args.config).add_alias(
+            alias_id=args.alias_id,
+            real_secret=real_secret,
+            env_name=args.env_name,
+            provider=args.provider,
+            inject_as=args.inject_as,
+            name=args.name,
+            approved_hosts=args.approved_host,
+        )
+    except (KeyManagementError, SecretAliasError) as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+    print(
+        json.dumps(
+            {
+                "alias_id": alias.alias_id,
+                "name": alias.name,
+                "env_name": alias.env_name,
+                "provider": alias.provider,
+                "inject_as": alias.inject_as,
+                "approved_hosts": alias.approved_hosts,
+                "has_local_secret": True,
+                "local_only": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def list_secret_aliases(args: argparse.Namespace) -> int:
+    aliases = _secret_alias_service(args.config).list_aliases()
+    print(
+        json.dumps(
+            [
+                {
+                    "alias_id": alias.alias_id,
+                    "name": alias.name,
+                    "env_name": alias.env_name,
+                    "provider": alias.provider,
+                    "inject_as": alias.inject_as,
+                    "approved_hosts": alias.approved_hosts,
+                    "has_local_secret": bool(alias.secret_ref),
+                    "local_only": True,
+                }
+                for alias in aliases
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def use_secret_aliases(args: argparse.Namespace) -> int:
+    try:
+        assigned = _secret_alias_service(args.config).assign_to_project(
+            args.config,
+            args.alias_ids,
+            project=args.project or os.path.basename(os.getcwd()) or "default",
+        )
+    except SecretAliasError as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+    print(
+        json.dumps(
+            {
+                "assigned": [
+                    {
+                        "alias_id": item.alias_id,
+                        "env_name": item.env_name,
+                        "provider": item.provider,
+                        "approved_hosts": item.approved_hosts,
+                    }
+                    for item in assigned
+                ],
+                "config_path": args.config,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _secret_alias_service(config_path: str) -> SecretAliasService:
+    home = agentsecure_home()
+    return SecretAliasService(
+        local_secret_alias_store_for_home(home),
+        encrypted_secret_store_for_vault(),
+        local_grant_store_for_config(config_path),
+        JsonLineAuditLogger(".agentsecure/audit.log"),
+    )
 
 
 def run_api(args: argparse.Namespace) -> int:
