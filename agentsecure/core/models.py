@@ -33,6 +33,9 @@ class SecretBinding:
     real_secret_ref: str = ""
     inject_as: str = "authorization_bearer"
     provider: str = "custom"
+    expires_at: Optional[float] = None
+    alias_id: str = ""
+    approved_hosts: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,32 @@ class SecretGrant:
     created_at: float
     expires_at: float
     status: str = "active"
+    alias_id: str = ""
+    scope: str = "project"
+    project_id: str = ""
+    run_id: str = ""
+
+
+@dataclass(frozen=True)
+class SecretAlias:
+    alias_id: str
+    name: str
+    env_name: str
+    provider: str
+    inject_as: str = "authorization_bearer"
+    secret_ref: str = ""
+    approved_hosts: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProjectSecretAlias:
+    alias_id: str
+    env_name: str = ""
+    provider: str = ""
+    inject_as: str = "authorization_bearer"
+    approved_hosts: List[str] = field(default_factory=list)
+    required: bool = True
+    mode: str = "virtualize"
 
 
 @dataclass(frozen=True)
@@ -190,6 +219,7 @@ class BrokerEndpointPlan:
 @dataclass
 class AgentSecureConfig:
     secrets: List[SecretBinding] = field(default_factory=list)
+    secret_aliases: List[ProjectSecretAlias] = field(default_factory=list)
     env_policy: EnvPolicy = field(default_factory=EnvPolicy)
     network: NetworkPolicy = field(default_factory=NetworkPolicy)
     process: ProcessPolicy = field(default_factory=ProcessPolicy)

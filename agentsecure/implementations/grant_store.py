@@ -8,8 +8,11 @@ from agentsecure.core.models import SecretGrant
 from agentsecure.interfaces.grants import GrantStore
 
 
+DEFAULT_GRANT_STORE_PATH = ".agentsecure/grants.json"
+
+
 class LocalJsonGrantStore(GrantStore):
-    def __init__(self, path: str = ".agentsecure/grants.json") -> None:
+    def __init__(self, path: str = DEFAULT_GRANT_STORE_PATH) -> None:
         self._path = path
 
     def put(self, grant: SecretGrant) -> None:
@@ -37,6 +40,10 @@ class LocalJsonGrantStore(GrantStore):
             created_at=grant.created_at,
             expires_at=grant.expires_at,
             status="revoked",
+            alias_id=grant.alias_id,
+            scope=grant.scope,
+            project_id=grant.project_id,
+            run_id=grant.run_id,
         )
         self._write(grants)
         return True
@@ -61,6 +68,10 @@ class LocalJsonGrantStore(GrantStore):
                 created_at=float(item["created_at"]),
                 expires_at=float(item["expires_at"]),
                 status=str(item.get("status", "active")),
+                alias_id=str(item.get("alias_id", "")),
+                scope=str(item.get("scope", "project")),
+                project_id=str(item.get("project_id", "")),
+                run_id=str(item.get("run_id", "")),
             )
         return result
 
@@ -82,3 +93,12 @@ class LocalJsonGrantStore(GrantStore):
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
+
+def local_grant_store_for_project(project_root: str = ".") -> LocalJsonGrantStore:
+    base = os.path.abspath(project_root)
+    return LocalJsonGrantStore(os.path.join(base, DEFAULT_GRANT_STORE_PATH))
+
+
+def local_grant_store_for_config(config_path: str) -> LocalJsonGrantStore:
+    config_dir = os.path.dirname(os.path.abspath(config_path)) or "."
+    return local_grant_store_for_project(config_dir)

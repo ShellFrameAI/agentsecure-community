@@ -6,6 +6,20 @@ from agentsecure.implementations.encrypted_secret_store import EncryptedLocalSec
 from agentsecure.interfaces.key_store import SecretStore
 
 
+def agentsecure_home() -> str:
+    return os.path.abspath(os.path.expanduser(os.environ.get("AGENTSECURE_HOME", "~/.agentsecure")))
+
+
+def encrypted_secret_store_for_vault() -> SecretStore:
+    base = os.path.join(agentsecure_home(), "vault")
+    key_provider = LocalDeviceKeyProvider(os.path.join(base, "device.key"))
+    cipher = LocalSecretCipher(key_provider)
+    return EncryptedLocalSecretStore(
+        os.path.join(base, "secrets.enc.json"),
+        cipher,
+    )
+
+
 def encrypted_secret_store_for_project(project_root: str = ".") -> SecretStore:
     base = os.path.abspath(project_root)
     key_provider = LocalDeviceKeyProvider(os.path.join(base, ".agentsecure", "device.key"))
