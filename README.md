@@ -51,6 +51,17 @@ python3 -m agentsecure run claude
 Keep real secrets in one local AgentSecure vault:
 
 ```bash
+agentsecure secrets import .env
+agentsecure run -- claude
+```
+
+`secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes a private backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders.
+
+Use `--dry-run` to preview the import, or `--keep-file` if you want to store aliases without rewriting `.env`.
+
+For manual control, add one alias at a time:
+
+```bash
 printf '%s' "$DATABASE_URL" | agentsecure secrets add dev_db \
   --env-name DATABASE_URL \
   --provider database \

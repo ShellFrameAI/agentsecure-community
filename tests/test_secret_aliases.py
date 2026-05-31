@@ -11,6 +11,97 @@ from agentsecure.core.container import Container
 
 
 class SecretAliasesCliTest(unittest.TestCase):
+    def test_import_dotenv_moves_secrets_to_vault_and_rewrites_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            real_url = "postgres://user:password@dev.example.invalid/mydb"
+            real_key = "sk_test_dummy_value_do_not_use"
+            with open(env_path, "w") as handle:
+                handle.write("DATABASE_URL=%s\n" % real_url)
+                handle.write("STRIPE_API_KEY=%s\n" % real_key)
+                handle.write("DEBUG=true\n")
+
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "import", ".env"]))
+
+                result = json.loads(output.getvalue())
+                self.assertTrue(result["rewritten"])
+                self.assertEqual("local_vault", result["real_secrets_stored"])
+                self.assertTrue(os.path.exists(result["backup"]))
+                self.assertTrue(result["backup"].startswith(home_dir))
+
+                with open(env_path, "r") as handle:
+                    dotenv_text = handle.read()
+                self.assertIn("DATABASE_URL=AGENTSECURE_ALIAS_DATABASE_URL", dotenv_text)
+                self.assertIn("STRIPE_API_KEY=AGENTSECURE_ALIAS_STRIPE_API_KEY", dotenv_text)
+                self.assertIn("DEBUG=true", dotenv_text)
+                self.assertNotIn(real_url, dotenv_text)
+                self.assertNotIn(real_key, dotenv_text)
+
+                with open(config_path, "r") as handle:
+                    raw = json.load(handle)
+                raw_text = json.dumps(raw)
+                self.assertNotIn(real_url, raw_text)
+                self.assertNotIn(real_key, raw_text)
+                self.assertEqual(
+                    ["database_url", "stripe_api_key"],
+                    [item["alias_id"] for item in raw["secret_aliases"]],
+                )
+                self.assertIn("dev.example.invalid", raw["network"]["allow_domains"])
+                self.assertIn("api.stripe.com", raw["network"]["allow_domains"])
+
+                with open(result["backup"], "r") as handle:
+                    backup_text = handle.read()
+                self.assertIn(real_url, backup_text)
+                self.assertIn(real_key, backup_text)
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_import_dotenv_dry_run_does_not_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            real_url = "postgres://user:password@dev.example.invalid/mydb"
+            with open(env_path, "w") as handle:
+                handle.write("DATABASE_URL=%s\n" % real_url)
+
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "import", ".env", "--dry-run"]))
+                result = json.loads(output.getvalue())
+                self.assertTrue(result["dry_run"])
+                self.assertFalse(os.path.exists(config_path))
+                with open(env_path, "r") as handle:
+                    self.assertIn(real_url, handle.read())
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
     def test_project_assignment_stores_only_alias_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             project_dir = os.path.join(temp_dir, "project")

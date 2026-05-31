@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -14,6 +15,7 @@ import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from agentsecure import __version__
@@ -256,6 +258,13 @@ def build_parser() -> argparse.ArgumentParser:
     use_secret_parser = secrets_subparsers.add_parser("use", help="Assign aliases to this project")
     use_secret_parser.add_argument("alias_ids", nargs="+")
     use_secret_parser.add_argument("--project", default="", help="Project name for audit metadata")
+    import_secret_parser = secrets_subparsers.add_parser("import", help="Move secrets from a dotenv file into the local vault")
+    import_secret_parser.add_argument("path", nargs="?", default=".env", help="Dotenv file to import, default .env")
+    import_secret_parser.add_argument("--project", default="", help="Project name for audit metadata")
+    import_secret_parser.add_argument("--approved-host", action="append", default=[], help="Additional host allowed to receive imported secrets")
+    import_secret_parser.add_argument("--keep-file", action="store_true", help="Do not rewrite the dotenv file after importing")
+    import_secret_parser.add_argument("--no-backup", action="store_true", help="Do not store a local backup before rewriting")
+    import_secret_parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without writing changes")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -1149,6 +1158,8 @@ def handle_secret_aliases(args: argparse.Namespace) -> int:
         return list_secret_aliases(args)
     if args.secrets_command == "use":
         return use_secret_aliases(args)
+    if args.secrets_command == "import":
+        return import_secret_aliases(args)
     sys.stderr.write("agentsecure: missing secrets subcommand\n")
     return 2
 
@@ -1240,6 +1251,204 @@ def use_secret_aliases(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def import_secret_aliases(args: argparse.Namespace) -> int:
+    dotenv_path = os.path.abspath(args.path)
+    if not os.path.exists(dotenv_path):
+        sys.stderr.write("agentsecure: dotenv file not found: %s\n" % args.path)
+        return 2
+    source_dir = os.path.dirname(dotenv_path) or "."
+    source_name = os.path.basename(dotenv_path)
+    discoveries = DotenvSecretScanner(source_dir, [source_name]).scan()
+    discoveries = [secret for secret in discoveries if secret.source == source_name]
+    if not discoveries:
+        print(
+            json.dumps(
+                {
+                    "imported": [],
+                    "dotenv": args.path,
+                    "message": "No secrets found",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    imports = []
+    for secret in discoveries:
+        alias_id = _alias_id_for_env_name(secret.name)
+        approved_hosts = _approved_hosts_for_import(secret, args.approved_host)
+        imports.append(
+            {
+                "alias_id": alias_id,
+                "env_name": secret.name,
+                "provider": secret.provider_hint,
+                "approved_hosts": approved_hosts,
+                "placeholder": _alias_placeholder(alias_id),
+            }
+        )
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dotenv": args.path,
+                    "imported": imports,
+                    "would_rewrite_dotenv": not args.keep_file,
+                    "dry_run": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    service = _secret_alias_service(args.config)
+    try:
+        for secret, item in zip(discoveries, imports):
+            service.add_alias(
+                alias_id=item["alias_id"],
+                real_secret=secret.value,
+                env_name=secret.name,
+                provider=secret.provider_hint,
+                approved_hosts=item["approved_hosts"],
+                name=secret.name,
+            )
+        assigned = service.assign_to_project(
+            args.config,
+            [item["alias_id"] for item in imports],
+            project=args.project or os.path.basename(os.getcwd()) or "default",
+        )
+    except SecretAliasError as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+
+    backup_path = ""
+    if not args.keep_file:
+        if not args.no_backup:
+            try:
+                backup_path = _backup_dotenv_to_vault(dotenv_path, args.config)
+            except OSError as exc:
+                sys.stderr.write("agentsecure: failed to back up dotenv file: %s\n" % exc)
+                return 1
+        try:
+            _rewrite_dotenv_with_alias_placeholders(dotenv_path, {item["env_name"]: item["placeholder"] for item in imports})
+        except OSError as exc:
+            sys.stderr.write("agentsecure: failed to rewrite dotenv file: %s\n" % exc)
+            return 1
+
+    print(
+        json.dumps(
+            {
+                "dotenv": args.path,
+                "backup": backup_path,
+                "rewritten": not args.keep_file,
+                "imported": [
+                    {
+                        "alias_id": item.alias_id,
+                        "env_name": item.env_name,
+                        "provider": item.provider,
+                        "approved_hosts": item.approved_hosts,
+                    }
+                    for item in assigned
+                ],
+                "real_secrets_stored": "local_vault",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _alias_id_for_env_name(env_name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "_", str(env_name).strip().lower())
+    normalized = normalized.strip("._-")
+    return normalized or "secret"
+
+
+def _alias_placeholder(alias_id: str) -> str:
+    return "AGENTSECURE_ALIAS_%s" % re.sub(r"[^A-Z0-9]+", "_", alias_id.upper()).strip("_")
+
+
+def _approved_hosts_for_import(secret: DiscoveredSecret, extra_hosts: List[str]) -> List[str]:
+    hosts = []
+    inferred = _host_from_secret_value(secret.value)
+    if inferred:
+        hosts.append(inferred)
+    provider_hosts = {
+        "openai": "api.openai.com",
+        "anthropic": "api.anthropic.com",
+        "github": "api.github.com",
+        "stripe": "api.stripe.com",
+    }
+    provider_host = provider_hosts.get(secret.provider_hint)
+    if provider_host:
+        hosts.append(provider_host)
+    hosts.extend(extra_hosts or [])
+    result = []
+    seen = set()
+    for host in hosts:
+        normalized = str(host).strip().lower().rstrip(".")
+        if normalized and normalized not in seen:
+            result.append(normalized)
+            seen.add(normalized)
+    return result
+
+
+def _host_from_secret_value(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value).strip())
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").strip().lower().rstrip(".")
+
+
+def _backup_dotenv_to_vault(dotenv_path: str, config_path: str) -> str:
+    backup_dir = os.path.join(agentsecure_home(), "backups", project_id_for_path(config_path))
+    os.makedirs(backup_dir, exist_ok=True)
+    backup_path = os.path.join(
+        backup_dir,
+        "%s.%s.bak" % (os.path.basename(dotenv_path), time.strftime("%Y%m%d%H%M%S")),
+    )
+    shutil.copy2(dotenv_path, backup_path)
+    os.chmod(backup_path, 0o600)
+    return backup_path
+
+
+def _rewrite_dotenv_with_alias_placeholders(dotenv_path: str, placeholders: Dict[str, str]) -> None:
+    with open(dotenv_path, "r") as handle:
+        lines = handle.readlines()
+    rewritten = []
+    for line in lines:
+        parsed_name = _dotenv_line_name(line)
+        if parsed_name and parsed_name in placeholders:
+            prefix = line.split("=", 1)[0].rstrip()
+            newline = "\n" if line.endswith("\n") else ""
+            rewritten.append("%s=%s%s" % (prefix, placeholders[parsed_name], newline))
+        else:
+            rewritten.append(line)
+    fd, temp_path = tempfile.mkstemp(prefix=".agentsecure-dotenv-", dir=os.path.dirname(dotenv_path) or ".")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.writelines(rewritten)
+        shutil.copymode(dotenv_path, temp_path)
+        os.replace(temp_path, dotenv_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _dotenv_line_name(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return ""
+    name = stripped.split("=", 1)[0].strip()
+    if name.startswith("export "):
+        name = name[len("export ") :].strip()
+    return name
 
 
 def _secret_alias_service(config_path: str) -> SecretAliasService:
