@@ -826,6 +826,8 @@ def _start_local_gateway_thread(container: Container, host: str, port: int):
         container.audit_logger,
         container.bindings,
         container.config.provider_proxy,
+        container.project_id,
+        container.run_id,
     )
 
     def run_gateway_thread() -> None:
