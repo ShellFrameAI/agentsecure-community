@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import getpass
+import ipaddress
 import json
 import os
 import queue
@@ -197,6 +198,23 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--workspace-keep", action="store_true", help="Keep the safe workspace after the agent exits")
     run_parser.add_argument("--read-only-workspace", action="store_true", help="Make the safe workspace read-only")
     run_parser.add_argument("--no-new-files", action="store_true", help="Block creating, deleting, or renaming files in the safe workspace")
+    run_parser.add_argument(
+        "--allow-loopback-proxy-bypass",
+        action="store_true",
+        help="Allow direct 127.0.0.1/localhost connections when strict proxy is enabled",
+    )
+    run_parser.add_argument(
+        "--allow-private-proxy-bypass",
+        action="append",
+        default=[],
+        metavar="PRIVATE_IP",
+        help="Allow direct connections to one private IP when strict proxy is enabled",
+    )
+    run_parser.add_argument(
+        "--strict-proxy",
+        action="store_true",
+        help="Route general HTTP(S) traffic through the AgentSecure gateway. Command-guard leaves general traffic direct by default.",
+    )
     run_parser.add_argument(
         "--workspace-mode",
         choices=["symlink", "copy"],
@@ -441,7 +459,24 @@ def run_agent(args: argparse.Namespace) -> int:
     if session_id:
         env["AGENTSECURE_SESSION_ID"] = session_id
     proxy_url = _proxy_url(gateway_host, gateway_port, session_id)
-    _apply_proxy_environment(env, proxy_url)
+    proxy_enabled = bool(getattr(args, "strict_proxy", False) or args.runtime == "workspace")
+    if proxy_enabled:
+        try:
+            _apply_proxy_environment(
+                env,
+                proxy_url,
+                allow_loopback_bypass=getattr(args, "allow_loopback_proxy_bypass", False),
+                private_bypass_hosts=getattr(args, "allow_private_proxy_bypass", []),
+            )
+        except ValueError as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
+    else:
+        try:
+            _validate_private_proxy_bypass_hosts(getattr(args, "allow_private_proxy_bypass", []))
+        except ValueError as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
     _apply_provider_proxy_environment(env, container, gateway_host, gateway_port)
     command_metadata = safe_command_metadata(argv)
     container.audit_logger.record(
@@ -449,7 +484,7 @@ def run_agent(args: argparse.Namespace) -> int:
         {
             "argv": command_metadata["argv"],
             "argc": command_metadata["argc"],
-            "proxy": proxy_url,
+            "proxy": proxy_url if proxy_enabled else "",
             "cwd": run_cwd,
             "workspace": workspace_session.workspace_root if workspace_session else "",
             "project": project_name,
@@ -925,14 +960,28 @@ def _try_cloud_sync(
         return {}
 
 
-def _apply_proxy_environment(env, proxy_url: str) -> None:
+def _apply_proxy_environment(
+    env,
+    proxy_url: str,
+    allow_loopback_bypass: bool = False,
+    private_bypass_hosts: Optional[List[str]] = None,
+) -> None:
     env["HTTP_PROXY"] = proxy_url
     env["HTTPS_PROXY"] = proxy_url
     env["http_proxy"] = proxy_url
     env["https_proxy"] = proxy_url
-    no_proxy = _merge_no_proxy(env.get("NO_PROXY") or env.get("no_proxy") or "")
+    no_proxy = _merge_no_proxy(
+        env.get("NO_PROXY") or env.get("no_proxy") or "",
+        include_defaults=allow_loopback_bypass,
+        private_bypass_hosts=private_bypass_hosts,
+    )
     env["NO_PROXY"] = no_proxy
     env["no_proxy"] = no_proxy
+
+
+def _validate_private_proxy_bypass_hosts(private_bypass_hosts: Optional[List[str]] = None) -> None:
+    for host in private_bypass_hosts or []:
+        _normalize_private_proxy_bypass_host(host)
 
 
 def _apply_provider_proxy_environment(env, container: Container, gateway_host: str, gateway_port: int) -> None:
@@ -988,7 +1037,11 @@ def _configured_secret_replacements(container: Container, existing: List[SecretR
     return replacements
 
 
-def _merge_no_proxy(existing: str) -> str:
+def _merge_no_proxy(
+    existing: str,
+    include_defaults: bool = True,
+    private_bypass_hosts: Optional[List[str]] = None,
+) -> str:
     defaults = [
         "localhost",
         "127.0.0.1",
@@ -999,7 +1052,11 @@ def _merge_no_proxy(existing: str) -> str:
     ]
     values = []
     seen = set()
-    for raw in existing.split(",") + defaults:
+    extras = defaults if include_defaults else []
+    extras = list(extras)
+    for host in private_bypass_hosts or []:
+        extras.append(_normalize_private_proxy_bypass_host(host))
+    for raw in existing.split(",") + extras:
         value = raw.strip()
         if not value:
             continue
@@ -1010,6 +1067,24 @@ def _merge_no_proxy(existing: str) -> str:
             values.append(value)
             seen.add(key)
     return ",".join(values)
+
+
+def _normalize_private_proxy_bypass_host(value: str) -> str:
+    host = str(value).strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    host = host.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if host.startswith("[") and "]" in host:
+        host = host[1:].split("]", 1)[0]
+    elif ":" in host:
+        host = host.split(":", 1)[0]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError("private proxy bypass must be a private IP address")
+    if not (ip.is_private or ip.is_loopback or ip.is_link_local):
+        raise ValueError("private proxy bypass host must be private, loopback, or link-local")
+    return str(ip)
 
 
 def run_gateway(args: argparse.Namespace) -> int:

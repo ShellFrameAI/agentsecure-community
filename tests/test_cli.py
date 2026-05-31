@@ -32,7 +32,7 @@ class CliTest(unittest.TestCase):
 
     def test_proxy_environment_bypasses_local_services(self):
         env = {"NO_PROXY": "metadata.google.internal"}
-        _apply_proxy_environment(env, "http://127.0.0.1:8765")
+        _apply_proxy_environment(env, "http://127.0.0.1:8765", allow_loopback_bypass=True)
 
         self.assertEqual("http://127.0.0.1:8765", env["HTTP_PROXY"])
         self.assertIn("localhost", env["NO_PROXY"])
@@ -40,6 +40,23 @@ class CliTest(unittest.TestCase):
         self.assertIn("::1", env["NO_PROXY"])
         self.assertIn("metadata.google.internal", env["NO_PROXY"])
         self.assertEqual(env["NO_PROXY"], env["no_proxy"])
+
+    def test_proxy_environment_defaults_to_no_extra_bypass(self):
+        env = {"NO_PROXY": "metadata.google.internal"}
+        _apply_proxy_environment(env, "http://127.0.0.1:8765")
+
+        self.assertEqual("http://127.0.0.1:8765", env["HTTP_PROXY"])
+        self.assertEqual("metadata.google.internal", env["NO_PROXY"])
+
+    def test_proxy_environment_accepts_private_bypass(self):
+        env = {}
+        _apply_proxy_environment(
+            env,
+            "http://127.0.0.1:8765",
+            private_bypass_hosts=["10.0.0.3:11434"],
+        )
+
+        self.assertEqual("10.0.0.3", env["NO_PROXY"])
 
     def test_no_proxy_merge_deduplicates_values(self):
         merged = _merge_no_proxy("localhost,LOCALHOST,example.com")
