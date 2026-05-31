@@ -1,9 +1,12 @@
 import unittest
 import socket
+import os
+import tempfile
 from io import StringIO
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
+from agentsecure.cli.common import update_allowed_domains
 from agentsecure.cli.main import (
     _apply_proxy_environment,
     _apply_read_only_agent_mode,
@@ -69,6 +72,27 @@ class CliTest(unittest.TestCase):
 
         self.assertNotIn("*", merged.split(","))
         self.assertIn("api.openai.com", merged)
+
+    def test_network_allow_url_adds_domain_and_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    0,
+                    update_allowed_domains(
+                        config_path,
+                        ["http://approved.127.0.0.1.nip.io:18080/whoami"],
+                        add=True,
+                    ),
+                )
+
+            import json
+
+            with open(config_path, "r") as handle:
+                config = json.load(handle)
+            self.assertIn("approved.127.0.0.1.nip.io", config["network"]["allow_domains"])
+            self.assertIn(18080, config["network"]["allow_ports"])
 
     def test_strips_backing_secret_environment(self):
         env = {

@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from typing import List
+from urllib.parse import urlsplit
 
 from agentsecure.core.config import JsonConfigWriter
 from agentsecure.core.key_service import KeyManagementError
@@ -33,7 +34,23 @@ def normalize_policy_path(path: str) -> str:
 
 
 def normalize_domain(domain: str) -> str:
-    return domain.strip().lower().rstrip(".")
+    return normalize_network_destination(domain)[0]
+
+
+def normalize_network_destination(value: str):
+    raw = str(value or "").strip()
+    if "://" in raw:
+        parsed = urlsplit(raw)
+        return (parsed.hostname or "").strip().lower().rstrip("."), parsed.port
+    if "/" in raw:
+        raw = raw.split("/", 1)[0]
+    if raw.count(":") == 1:
+        host, port_text = raw.rsplit(":", 1)
+        try:
+            return host.strip().lower().rstrip("."), int(port_text)
+        except ValueError:
+            return raw.strip().lower().rstrip("."), None
+    return raw.strip().lower().rstrip("."), None
 
 
 def print_discovered(discovered) -> None:
@@ -88,19 +105,26 @@ def update_allowed_domains(config_path: str, domains: List[str], add: bool) -> i
     config = load_config_data(config_path)
     network = config.setdefault("network", {})
     allowed = list(network.get("allow_domains", []))
+    ports = list(network.get("allow_ports", [80, 443]))
     if add:
         for domain in domains:
-            normalized = normalize_domain(domain)
+            normalized, port = normalize_network_destination(domain)
             if normalized and normalized not in allowed:
                 allowed.append(normalized)
+            if port and port not in ports:
+                ports.append(port)
     else:
-        remove = set(normalize_domain(domain) for domain in domains)
+        remove = set(normalize_network_destination(domain)[0] for domain in domains)
         allowed = [domain for domain in allowed if domain not in remove]
     network["allow_domains"] = allowed
+    network["allow_ports"] = sorted(ports)
     JsonConfigWriter().save(config_path, config)
     print("Allowed credential domains:")
     for domain in allowed:
         print("  %s" % domain)
+    print("Allowed credential ports:")
+    for port in network["allow_ports"]:
+        print("  %s" % port)
     return 0
 
 

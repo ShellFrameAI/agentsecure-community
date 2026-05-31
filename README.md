@@ -83,10 +83,19 @@ What this does:
 - The real value is stored locally under `~/.agentsecure/vault/`.
 - `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
 - At run time, AgentSecure creates a short-lived fake token such as `virt_database_...`.
-- The gateway swaps that fake token for the real secret only for the approved host.
+- For guarded network tools such as `curl` and `wget`, AgentSecure automatically routes credential-bearing requests through the local gateway.
+- The gateway swaps fake tokens for real secrets only when the destination host and port are allowed by network policy.
 - The fake token is revoked after the run.
 
 Do not put real secrets in project `.env` files. Use `.env` for non-secret config or fake placeholders that are safe for an agent to read.
+
+Approve a destination with its URL when the port is not 80 or 443:
+
+```bash
+agentsecure network allow https://api.example.com:8443/v1/test
+```
+
+This adds `api.example.com` to `network.allow_domains` and `8443` to `network.allow_ports`.
 
 ## Agent Run Guidance
 

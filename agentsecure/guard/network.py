@@ -64,6 +64,9 @@ class GuardedNetworkCommandPolicy:
                 )
         return None
 
+    def should_proxy(self, tool: str, args: List[str]) -> bool:
+        return tool in NETWORK_TOOLS and self._has_visible_credentials(args) and bool(self._urls(args))
+
     def _has_visible_credentials(self, args: List[str]) -> bool:
         joined = " ".join(args).lower()
         if "virt_" in joined:

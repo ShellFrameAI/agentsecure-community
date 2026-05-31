@@ -497,6 +497,7 @@ def run_agent(args: argparse.Namespace) -> int:
     if session_id:
         env["AGENTSECURE_SESSION_ID"] = session_id
     proxy_url = _proxy_url(gateway_host, gateway_port, session_id)
+    env["AGENTSECURE_PROXY_URL"] = proxy_url
     proxy_enabled = bool(getattr(args, "strict_proxy", False) or args.runtime == "workspace")
     if proxy_enabled:
         try:

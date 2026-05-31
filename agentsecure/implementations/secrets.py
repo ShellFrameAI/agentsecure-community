@@ -132,14 +132,8 @@ class PolicyAwareTokenResolver(TokenResolver):
                 return None
             approved_hosts = binding.approved_hosts or rule.approved_hosts
             host = str(context.get("host", "")).lower().rstrip(".")
-            if binding.alias_id:
-                if not approved_hosts or not host:
-                    self._audit.record(
-                        "secret_resolution_no_destination",
-                        {"virtual_token": virtual_token, "env_name": binding.env_name, "alias_id": binding.alias_id},
-                    )
-                    return None
-                if not _host_matches_any(host, approved_hosts):
+            if binding.alias_id and approved_hosts:
+                if not host or not _host_matches_any(host, approved_hosts):
                     self._audit.record(
                         "secret_resolution_wrong_destination",
                         {
