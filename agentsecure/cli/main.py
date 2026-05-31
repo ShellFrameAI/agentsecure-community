@@ -620,6 +620,8 @@ def _should_preserve_interactive_tty(argv: List[str]) -> bool:
     if not argv or not _stdio_is_tty():
         return False
     command = os.path.basename(argv[0])
+    if command == "ollama" and len(argv) >= 2 and argv[1] == "launch":
+        return not any(arg in ("-h", "--help") for arg in argv[2:])
     if command not in INTERACTIVE_AGENT_COMMANDS:
         return False
     return len(argv) == 1

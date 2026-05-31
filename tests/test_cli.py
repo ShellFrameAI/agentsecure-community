@@ -148,6 +148,18 @@ class CliTest(unittest.TestCase):
         with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
             self.assertFalse(_should_preserve_interactive_tty(["claude", "--print", "hello"]))
 
+    def test_preserves_tty_for_ollama_launch_integration(self):
+        with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
+            self.assertTrue(
+                _should_preserve_interactive_tty(
+                    ["ollama", "launch", "claude", "--model", "gemma4:e4b-64k"]
+                )
+            )
+
+    def test_does_not_preserve_tty_for_ollama_launch_help(self):
+        with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
+            self.assertFalse(_should_preserve_interactive_tty(["ollama", "launch", "--help"]))
+
 
 if __name__ == "__main__":
     unittest.main()
