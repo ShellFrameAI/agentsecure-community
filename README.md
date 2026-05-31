@@ -40,11 +40,14 @@ python -m pip install agentsecure
 agentsecure demo
 ```
 
-Then run your agent:
+For the easiest secret-safe API calls, add the AgentSecure MCP server to your agent client and run the agent normally:
 
 ```bash
-python3 -m agentsecure run claude
+agentsecure mcp install codex
+agentsecure mcp install claude
 ```
+
+Those commands print the local MCP configuration for this project. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
 
 ## Where Secrets Go
 
@@ -52,7 +55,7 @@ Keep real secrets in one local AgentSecure vault:
 
 ```bash
 agentsecure secrets import .env
-agentsecure run -- claude
+agentsecure mcp status
 ```
 
 `secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes a private backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders.
@@ -82,10 +85,9 @@ What this does:
 
 - The real value is stored locally under `~/.agentsecure/vault/`.
 - `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
-- At run time, AgentSecure creates a short-lived fake token such as `virt_database_...`.
-- For guarded network tools such as `curl` and `wget`, AgentSecure automatically routes credential-bearing requests through the local gateway.
-- The gateway swaps fake tokens for real secrets only when the destination host and port are allowed by network policy.
-- The fake token is revoked after the run.
+- For MCP calls, AgentSecure creates a short-lived fake token such as `virt_database_...`.
+- The MCP request tool swaps placeholders for real secrets only when the destination host and port are allowed by network policy.
+- The fake token is revoked after the MCP request.
 
 Do not put real secrets in project `.env` files. Use `.env` for non-secret config or fake placeholders that are safe for an agent to read.
 
@@ -97,7 +99,54 @@ agentsecure network allow https://api.example.com:8443/v1/test
 
 This adds `api.example.com` to `network.allow_domains` and `8443` to `network.allow_ports`.
 
-## Agent Run Guidance
+## MCP Agent Guidance
+
+AgentSecure Community is now MCP-first for developer ergonomics: let the coding agent edit files, install packages, run tests, and use normal tools directly. Use AgentSecure only when a request needs a protected secret.
+
+After importing or adding secrets, attach the MCP server printed by:
+
+```bash
+agentsecure mcp install codex
+```
+
+Then tell the agent:
+
+```text
+For API calls that need secrets, use the AgentSecure MCP tool `agentsecure.http.request`.
+Use placeholders such as ${API_KEY} and ${API_SECRET}; never ask me to paste real secrets and never read .env for secrets.
+If AgentSecure blocks the destination, show me the suggested `agentsecure network allow ...` command.
+```
+
+Example MCP tool arguments:
+
+```json
+{
+  "method": "GET",
+  "url": "https://api.example.com/v1/whoami",
+  "headers": {
+    "Authorization": "Bearer ${API_KEY}",
+    "X-Api-Secret": "${API_SECRET}"
+  }
+}
+```
+
+What happens:
+
+- The agent sees only placeholder names such as `API_KEY`.
+- AgentSecure checks `agentsecure.json` network policy before resolving anything.
+- AgentSecure sends the request itself with real secrets only to approved destinations.
+- The response is sanitized before it is returned to the agent.
+- Local audit logs record the destination, placeholders, policy decision, and status without raw secret values.
+
+For non-secret requests, the agent should use normal `curl`, SDKs, tests, or application code. The MCP tool intentionally blocks calls that do not contain `${ENV_NAME}` placeholders so AgentSecure does not become a general network proxy.
+
+## Optional Agent Run Guidance
+
+`agentsecure run` is still available when you want command wrappers, output masking, or safe workspaces around a whole local process:
+
+```bash
+agentsecure run -- claude
+```
 
 Every `agentsecure run` creates a small per-run guide under `.agentsecure/runs/` and prints its relative path:
 
@@ -345,6 +394,7 @@ Planned public demo assets:
 agentsecure/
   cli/                 CLI entry point
   core/                models, config loading, policy helpers
+  mcp/                 MCP tools for approved secret-bearing HTTP calls
   guard/               local command guard and output sanitizer
   discovery/           local secret discovery
   implementations/     local secret, grant, policy, and audit storage

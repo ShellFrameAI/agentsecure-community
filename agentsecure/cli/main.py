@@ -28,6 +28,7 @@ from agentsecure.cli.common import (
     scanner as _scanner,
 )
 from agentsecure.cli.demo import run_demo
+from agentsecure.mcp.server import add_mcp_subparser, handle_mcp
 from agentsecure.cli.policy import add_policy_subparser, handle_policy
 from agentsecure.cli.project import (
     _profile_label,
@@ -160,6 +161,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return handle_network(args)
     if args.command == "proxy":
         return handle_proxy(args)
+    if args.command == "mcp":
+        return handle_mcp(args)
     if args.command == "receipts":
         return handle_receipts(args)
     if args.command == "policy":
@@ -316,6 +319,7 @@ def build_parser() -> argparse.ArgumentParser:
     network_remove_parser = network_subparsers.add_parser("remove", help="Remove domains from credential allowlist")
     network_remove_parser.add_argument("domains", nargs="+")
 
+    add_mcp_subparser(subparsers)
     add_proxy_subparser(subparsers)
     receipts_parser = subparsers.add_parser("receipts", help="Run replayable AgentSecure proof receipts")
     receipts_parser.add_argument("--proxy", action="store_true", help="Run provider proxy receipts")
