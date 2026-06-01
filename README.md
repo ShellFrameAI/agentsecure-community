@@ -82,6 +82,18 @@ To undo the rewrite and bring the original `.env` back from the latest private b
 agentsecure secrets restore .env
 ```
 
+During uninstall, AgentSecure offers the same restore before it removes project state:
+
+```bash
+agentsecure uninstall
+```
+
+For non-interactive uninstall, restoring real secrets to the project file stays explicit:
+
+```bash
+agentsecure uninstall --yes --restore-dotenv
+```
+
 For manual control, add one alias at a time:
 
 ```bash

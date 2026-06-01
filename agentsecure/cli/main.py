@@ -77,6 +77,7 @@ from agentsecure.core.container import Container
 from agentsecure.core.key_service import KeyManagementError, KeyManagementService
 from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretBinding, SecretReplacement
 from agentsecure.core.provider_proxy import configured_provider_base_url, provider_base_local_path
+from agentsecure.core.dotenv_backups import backup_dotenv_to_vault, latest_dotenv_backup, restore_dotenv_backup
 from agentsecure.core.product import ProductService
 from agentsecure.core.runtime_bindings import ENV_RUNTIME_BINDINGS, serialize_runtime_bindings
 from agentsecure.core.secret_aliases import (
@@ -321,6 +322,9 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall_parser = subparsers.add_parser("uninstall", help="Remove AgentSecure from this project and user bin")
     uninstall_parser.add_argument("--yes", action="store_true", help="Confirm removal without prompting")
     uninstall_parser.add_argument("--install-dir", default=os.path.expanduser("~/.agentsecure/bin"), help="AgentSecure user bin directory")
+    uninstall_parser.add_argument("--dotenv", default=".env", help="Dotenv file to restore before uninstalling, default .env")
+    uninstall_parser.add_argument("--restore-dotenv", action="store_true", help="Restore dotenv from the latest AgentSecure backup without prompting")
+    uninstall_parser.add_argument("--no-restore-dotenv", action="store_true", help="Do not offer to restore dotenv during uninstall")
 
     files_parser = subparsers.add_parser("files", help="Manage write-protected files")
     files_subparsers = files_parser.add_subparsers(dest="files_command")
@@ -1636,7 +1640,7 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
     if not args.keep_file:
         if not args.no_backup:
             try:
-                backup_path = _backup_dotenv_to_vault(dotenv_path, args.config)
+                backup_path = backup_dotenv_to_vault(dotenv_path, args.config)
             except OSError as exc:
                 sys.stderr.write("agentsecure: failed to back up dotenv file: %s\n" % exc)
                 return 1
@@ -1672,7 +1676,7 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
 
 def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
     dotenv_path = os.path.abspath(args.path)
-    backup_path = os.path.abspath(args.backup) if args.backup else _latest_dotenv_backup(dotenv_path, args.config)
+    backup_path = os.path.abspath(args.backup) if args.backup else latest_dotenv_backup(dotenv_path, args.config)
     if not backup_path:
         sys.stderr.write("agentsecure: no backup found for %s\n" % args.path)
         return 2
@@ -1694,7 +1698,7 @@ def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
         )
         return 0
     try:
-        shutil.copy2(backup_path, dotenv_path)
+        restore_dotenv_backup(dotenv_path, backup_path)
     except OSError as exc:
         sys.stderr.write("agentsecure: failed to restore dotenv file: %s\n" % exc)
         return 1
@@ -1753,35 +1757,6 @@ def _host_from_secret_value(value: str) -> str:
     except ValueError:
         return ""
     return (parsed.hostname or "").strip().lower().rstrip(".")
-
-
-def _backup_dotenv_to_vault(dotenv_path: str, config_path: str) -> str:
-    backup_dir = os.path.join(agentsecure_home(), "backups", project_id_for_path(config_path))
-    os.makedirs(backup_dir, exist_ok=True)
-    backup_path = os.path.join(
-        backup_dir,
-        "%s.%s.bak" % (os.path.basename(dotenv_path), time.strftime("%Y%m%d%H%M%S")),
-    )
-    shutil.copy2(dotenv_path, backup_path)
-    os.chmod(backup_path, 0o600)
-    return backup_path
-
-
-def _latest_dotenv_backup(dotenv_path: str, config_path: str) -> str:
-    backup_dir = os.path.join(agentsecure_home(), "backups", project_id_for_path(config_path))
-    if not os.path.isdir(backup_dir):
-        return ""
-    prefix = os.path.basename(dotenv_path) + "."
-    candidates = []
-    for filename in os.listdir(backup_dir):
-        if filename.startswith(prefix) and filename.endswith(".bak"):
-            path = os.path.join(backup_dir, filename)
-            if os.path.isfile(path):
-                candidates.append(path)
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda path: (os.path.getmtime(path), path), reverse=True)
-    return candidates[0]
 
 
 def _rewrite_dotenv_with_alias_placeholders(dotenv_path: str, placeholders: Dict[str, str]) -> None:

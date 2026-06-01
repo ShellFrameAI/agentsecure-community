@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
+from unittest.mock import patch
 
 from agentsecure.cli.main import main
 from agentsecure.core.config import JsonConfigLoader
@@ -110,6 +111,87 @@ class SecretAliasesCliTest(unittest.TestCase):
                 self.assertTrue(result["backup"].startswith(home_dir))
                 with open(env_path, "r") as handle:
                     self.assertIn("AGENTSECURE_ALIAS_DATABASE_URL", handle.read())
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_uninstall_can_restore_dotenv_when_user_approves(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            install_dir = os.path.join(temp_dir, "bin")
+            os.makedirs(project_dir)
+            os.makedirs(install_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            real_url = "postgres://user:password@dev.example.invalid/mydb"
+            with open(env_path, "w") as handle:
+                handle.write("DATABASE_URL=%s\n" % real_url)
+
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "import", ".env"]))
+                with open(env_path, "r") as handle:
+                    self.assertIn("AGENTSECURE_ALIAS_DATABASE_URL", handle.read())
+
+                output = StringIO()
+                with patch("builtins.input", side_effect=["y", "y"]):
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            0,
+                            main(["--config", config_path, "uninstall", "--install-dir", install_dir]),
+                        )
+                self.assertIn("Dotenv: restored .env", output.getvalue())
+                with open(env_path, "r") as handle:
+                    restored = handle.read()
+                self.assertIn(real_url, restored)
+                self.assertNotIn("AGENTSECURE_ALIAS_DATABASE_URL", restored)
+                self.assertFalse(os.path.exists(config_path))
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_uninstall_leaves_dotenv_placeholder_when_user_declines_restore(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            install_dir = os.path.join(temp_dir, "bin")
+            os.makedirs(project_dir)
+            os.makedirs(install_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            with open(env_path, "w") as handle:
+                handle.write("DATABASE_URL=postgres://user:password@dev.example.invalid/mydb\n")
+
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(0, main(["--config", config_path, "secrets", "import", ".env"]))
+
+                output = StringIO()
+                with patch("builtins.input", side_effect=["y", "n"]):
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            0,
+                            main(["--config", config_path, "uninstall", "--install-dir", install_dir]),
+                        )
+                self.assertIn("Dotenv: restore skipped.", output.getvalue())
+                with open(env_path, "r") as handle:
+                    self.assertIn("AGENTSECURE_ALIAS_DATABASE_URL", handle.read())
+                self.assertFalse(os.path.exists(config_path))
             finally:
                 os.chdir(old_cwd)
                 if old_home is None:
