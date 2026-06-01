@@ -43,6 +43,14 @@ agentsecure demo
 For the easiest secret-safe API calls, add the AgentSecure MCP server to your agent client and run the agent normally:
 
 ```bash
+agentsecure start
+```
+
+The guided start command initializes the project, offers to import `.env` secrets into the local vault, prints the MCP setup command, and ends with a ready summary.
+
+Manual setup is still available:
+
+```bash
 agentsecure mcp install codex
 agentsecure mcp install claude
 ```
@@ -56,6 +64,12 @@ Keep real secrets in one local AgentSecure vault:
 ```bash
 agentsecure secrets import .env
 agentsecure mcp status
+```
+
+Or use the guided setup:
+
+```bash
+agentsecure start --approved-host https://api.example.com
 ```
 
 `secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes a private backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders.

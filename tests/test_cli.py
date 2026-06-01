@@ -2,6 +2,7 @@ import unittest
 import socket
 import os
 import tempfile
+import json
 from io import StringIO
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -128,6 +129,7 @@ class CliTest(unittest.TestCase):
             build_parser().print_help()
         help_text = output.getvalue()
 
+        self.assertIn("start", help_text)
         for private_command in ("daemon", "api", "enroll", "cloud"):
             self.assertNotIn(private_command, help_text)
         self.assertNotIn("AgentSecure Cloud", help_text)
@@ -183,6 +185,64 @@ class CliTest(unittest.TestCase):
     def test_does_not_preserve_tty_for_ollama_launch_help(self):
         with patch("agentsecure.cli.main._stdio_is_tty", return_value=True):
             self.assertFalse(_should_preserve_interactive_tty(["ollama", "launch", "--help"]))
+
+    def test_start_guided_setup_imports_dotenv_and_prints_ready_summary(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            env_path = os.path.join(project_dir, ".env")
+            with open(env_path, "w") as handle:
+                handle.write("API_KEY=real-api-key-local-test\n")
+            old_cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(
+                            [
+                                "--config",
+                                config_path,
+                                "start",
+                                "--yes",
+                                "--approved-host",
+                                "https://api.example.com",
+                            ]
+                        ),
+                    )
+                text = output.getvalue()
+                self.assertIn("Ready.", text)
+                self.assertIn("codex mcp add agentsecure --", text)
+                with open(env_path, "r") as handle:
+                    self.assertIn("API_KEY=AGENTSECURE_ALIAS_API_KEY", handle.read())
+                with open(config_path, "r") as handle:
+                    config = json.load(handle)
+                self.assertIn("api.example.com", config["network"]["allow_domains"])
+            finally:
+                os.chdir(old_cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_start_json_summary_can_skip_import(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["--config", config_path, "start", "--skip-import", "--client", "none", "--json"]))
+            payload = json.loads(output.getvalue())
+            self.assertTrue(payload["ready"])
+            self.assertEqual(config_path, payload["config_path"])
 
 
 if __name__ == "__main__":

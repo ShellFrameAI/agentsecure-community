@@ -14,6 +14,8 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import redirect_stdout
+from io import StringIO
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -26,9 +28,10 @@ from agentsecure.cli.common import (
     cloud_features_disabled as _cloud_features_disabled,
     cloud_features_enabled as _cloud_features_enabled,
     scanner as _scanner,
+    update_allowed_domains,
 )
 from agentsecure.cli.demo import run_demo
-from agentsecure.mcp.server import add_mcp_subparser, handle_mcp
+from agentsecure.mcp.server import add_mcp_subparser, codex_mcp_add_command, handle_mcp, mcp_install_instructions
 from agentsecure.cli.policy import add_policy_subparser, handle_policy
 from agentsecure.cli.project import (
     _profile_label,
@@ -126,6 +129,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_agent(args)
+    if args.command == "start":
+        return start_onboarding(args)
     if args.command == "gateway":
         return run_gateway(args)
     if args.command == "daemon":
@@ -234,6 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--ttl", default="2h", help="Grant duration for protected discovered secrets")
     run_parser.add_argument("agent_command", nargs=argparse.REMAINDER)
+
+    start_parser = subparsers.add_parser("start", help="Guided setup for vault secrets and MCP")
+    start_parser.add_argument("--dotenv", default=".env", help="Dotenv file to import, default .env")
+    start_parser.add_argument("--skip-import", action="store_true", help="Do not import dotenv secrets")
+    start_parser.add_argument("--keep-file", action="store_true", help="Store secrets without rewriting the dotenv file")
+    start_parser.add_argument("--approved-host", "--allow", action="append", default=[], help="Credential destination URL or host to approve")
+    start_parser.add_argument("--client", choices=["codex", "claude", "both", "none"], default="codex", help="Agent client to configure")
+    start_parser.add_argument("--install-mcp", action="store_true", help="Run codex mcp add when --client is codex or both")
+    start_parser.add_argument("--yes", action="store_true", help="Use safe defaults without prompting")
+    start_parser.add_argument("--json", action="store_true", help="Print machine-readable summary")
 
     subparsers.add_parser("gateway", help="Run only the local gateway")
     subparsers.add_parser("env", help="Print virtual environment variables")
@@ -629,6 +644,160 @@ def run_agent(args: argparse.Namespace) -> int:
                 "workspace_removed",
                 {"workspace": workspace_session.workspace_root},
             )
+
+
+def start_onboarding(args: argparse.Namespace) -> int:
+    config_path = os.path.abspath(args.config)
+    dotenv_path = os.path.abspath(args.dotenv)
+    summary = {
+        "ready": False,
+        "config_path": config_path,
+        "dotenv": args.dotenv,
+        "steps": [],
+        "mcp": {},
+    }
+    if not args.json:
+        print("AgentSecure start")
+        print("Project: %s" % os.getcwd())
+
+    if not os.path.exists(config_path):
+        ProductService(config_path, _scanner()).init_project()
+        summary["steps"].append({"name": "config", "status": "created"})
+        _start_print(args, "Config: created %s" % args.config)
+    else:
+        summary["steps"].append({"name": "config", "status": "exists"})
+        _start_print(args, "Config: found %s" % args.config)
+
+    if args.skip_import:
+        summary["steps"].append({"name": "secrets", "status": "skipped"})
+        _start_print(args, "Secrets: skipped import")
+    elif os.path.exists(dotenv_path):
+        if args.yes or _confirm("Import real secrets from %s into the local AgentSecure vault?" % args.dotenv, True):
+            import_args = argparse.Namespace(
+                config=config_path,
+                path=args.dotenv,
+                project=os.path.basename(os.getcwd()) or "default",
+                approved_host=list(args.approved_host or []),
+                keep_file=args.keep_file,
+                no_backup=False,
+                dry_run=False,
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = import_secret_aliases(import_args)
+            if code != 0:
+                return code
+            imported = _json_or_empty(output.getvalue())
+            count = len(imported.get("imported", []))
+            summary["steps"].append(
+                {
+                    "name": "secrets",
+                    "status": "imported",
+                    "count": count,
+                    "rewritten": bool(imported.get("rewritten", False)),
+                    "backup": imported.get("backup", ""),
+                }
+            )
+            message = "Secrets: imported %s from %s into local vault" % (count, args.dotenv)
+            if imported.get("rewritten"):
+                message += " and rewrote %s with safe placeholders" % args.dotenv
+            _start_print(args, message)
+            if imported.get("backup"):
+                _start_print(args, "Backup: %s" % imported.get("backup"))
+        else:
+            summary["steps"].append({"name": "secrets", "status": "not_imported"})
+            _start_print(args, "Secrets: not imported")
+    else:
+        summary["steps"].append({"name": "secrets", "status": "no_dotenv"})
+        _start_print(args, "Secrets: no %s file found" % args.dotenv)
+
+    if args.approved_host:
+        output = StringIO()
+        with redirect_stdout(output):
+            code = update_allowed_domains(config_path, args.approved_host, add=True)
+        if code != 0:
+            return code
+        summary["steps"].append({"name": "network", "status": "updated", "approved": list(args.approved_host)})
+        _start_print(args, "Network: approved %s" % ", ".join(args.approved_host))
+    else:
+        summary["steps"].append({"name": "network", "status": "unchanged"})
+        _start_print(args, "Network: no new destinations approved")
+
+    clients = []
+    if args.client == "both":
+        clients = ["codex", "claude"]
+    elif args.client != "none":
+        clients = [args.client]
+    instructions = {}
+    for client in clients:
+        text = mcp_install_instructions(client, config_path)
+        instructions[client] = text
+        if client == "codex" and args.install_mcp:
+            install_result = _run_codex_mcp_add(config_path)
+            summary["mcp"]["codex_install"] = install_result
+            if install_result["ok"]:
+                _start_print(args, "MCP: installed AgentSecure in Codex")
+            else:
+                _start_print(args, "MCP: Codex install failed (%s)" % install_result["error"])
+        _start_print(args, "")
+        _start_print(args, text)
+    summary["mcp"]["instructions"] = instructions
+    summary["ready"] = True
+
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print("")
+        print("Ready.")
+        print("Start your agent normally. For secret API calls, tell it:")
+        print("Use AgentSecure MCP `agentsecure.http.request` with placeholders like ${API_KEY}.")
+        print("Do not read .env for secrets and do not ask me to paste real secrets.")
+    return 0
+
+
+def _confirm(prompt: str, default: bool) -> bool:
+    suffix = " [Y/n] " if default else " [y/N] "
+    if not sys.stdin.isatty():
+        return default
+    answer = input(prompt + suffix).strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def _json_or_empty(value: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _start_print(args: argparse.Namespace, message: str) -> None:
+    if not args.json:
+        print(message)
+
+
+def _run_codex_mcp_add(config_path: str) -> Dict[str, Any]:
+    command = ["codex", "mcp", "add", "agentsecure", "--"] + [
+        "agentsecure",
+        "--config",
+        os.path.abspath(config_path),
+        "mcp",
+        "serve",
+    ]
+    try:
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "command": codex_mcp_add_command(config_path), "error": str(exc)}
+    return {
+        "ok": process.returncode == 0,
+        "command": codex_mcp_add_command(config_path),
+        "returncode": process.returncode,
+        "stdout": process.stdout.strip(),
+        "stderr": process.stderr.strip(),
+        "error": process.stderr.strip() if process.returncode else "",
+    }
 
 
 def _workspace_base_for_runtime(source_root: str, runtime: str) -> str:

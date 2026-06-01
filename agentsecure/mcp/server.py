@@ -149,22 +149,31 @@ def handle_mcp(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     if command == "install":
-        config_path = os.path.abspath(args.config)
-        command_parts = ["agentsecure", "--config", config_path, "mcp", "serve"]
-        if args.client == "codex":
-            print("Run this command to add AgentSecure MCP to Codex:")
-            print("codex mcp add agentsecure -- %s" % " ".join(shlex.quote(part) for part in command_parts))
-            return 0
-        snippet = {
-            "mcpServers": {
-                "agentsecure": {
-                    "command": command_parts[0],
-                    "args": command_parts[1:],
-                }
-            }
-        }
-        print("# Add this MCP server to your Claude MCP configuration:")
-        print(json.dumps(snippet, indent=2, sort_keys=True))
+        print(mcp_install_instructions(args.client, args.config))
         return 0
     sys.stderr.write("agentsecure: missing mcp subcommand\n")
     return 2
+
+
+def mcp_command_parts(config_path: str):
+    return ["agentsecure", "--config", os.path.abspath(config_path), "mcp", "serve"]
+
+
+def codex_mcp_add_command(config_path: str) -> str:
+    command_parts = mcp_command_parts(config_path)
+    return "codex mcp add agentsecure -- %s" % " ".join(shlex.quote(part) for part in command_parts)
+
+
+def mcp_install_instructions(client: str, config_path: str) -> str:
+    if client == "codex":
+        return "Run this command to add AgentSecure MCP to Codex:\n%s" % codex_mcp_add_command(config_path)
+    command_parts = mcp_command_parts(config_path)
+    snippet = {
+        "mcpServers": {
+            "agentsecure": {
+                "command": command_parts[0],
+                "args": command_parts[1:],
+            }
+        }
+    }
+    return "# Add this MCP server to your Claude MCP configuration:\n%s" % json.dumps(snippet, indent=2, sort_keys=True)
