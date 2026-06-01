@@ -220,8 +220,14 @@ class CliTest(unittest.TestCase):
                 text = output.getvalue()
                 self.assertIn("Ready.", text)
                 self.assertIn("codex mcp add agentsecure --", text)
+                self.assertIn("Agent instructions: created AGENTS.md", text)
                 with open(env_path, "r") as handle:
                     self.assertIn("API_KEY=AGENTSECURE_ALIAS_API_KEY", handle.read())
+                with open(os.path.join(project_dir, "AGENTS.md"), "r") as handle:
+                    agent_instructions = handle.read()
+                self.assertIn("agentsecure.http.request", agent_instructions)
+                self.assertIn("Do not source `.env`", agent_instructions)
+                self.assertIn("AGENTSECURE_ALIAS_*", agent_instructions)
                 with open(config_path, "r") as handle:
                     config = json.load(handle)
                 self.assertIn("api.example.com", config["network"]["allow_domains"])
@@ -236,13 +242,59 @@ class CliTest(unittest.TestCase):
         from agentsecure.cli.main import main
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                config_path = os.path.join(temp_dir, "agentsecure.json")
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(0, main(["--config", config_path, "start", "--skip-import", "--client", "none", "--json"]))
+                payload = json.loads(output.getvalue())
+                self.assertTrue(payload["ready"])
+                self.assertEqual(config_path, payload["config_path"])
+                self.assertEqual(
+                    "created",
+                    [step for step in payload["steps"] if step["name"] == "agent_instructions"][0]["status"],
+                )
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_agent_instructions_preserve_existing_content_and_stay_idempotent(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
             config_path = os.path.join(temp_dir, "agentsecure.json")
-            output = StringIO()
-            with redirect_stdout(output):
-                self.assertEqual(0, main(["--config", config_path, "start", "--skip-import", "--client", "none", "--json"]))
-            payload = json.loads(output.getvalue())
-            self.assertTrue(payload["ready"])
-            self.assertEqual(config_path, payload["config_path"])
+            agents_path = os.path.join(temp_dir, "AGENTS.md")
+            with open(agents_path, "w") as handle:
+                handle.write("# Existing Instructions\n\nKeep this project-specific rule.\n")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "none", "--yes"]),
+                    )
+                with open(agents_path, "r") as handle:
+                    first = handle.read()
+                self.assertIn("Keep this project-specific rule.", first)
+                self.assertIn("agentsecure.http.request", first)
+                self.assertEqual(1, first.count("<!-- agentsecure:start -->"))
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "none", "--yes"]),
+                    )
+                with open(agents_path, "r") as handle:
+                    second = handle.read()
+                self.assertEqual(first, second)
+                self.assertEqual(1, second.count("<!-- agentsecure:start -->"))
+                self.assertIn("Agent instructions: unchanged AGENTS.md", output.getvalue())
+            finally:
+                os.chdir(old_cwd)
 
 
 if __name__ == "__main__":

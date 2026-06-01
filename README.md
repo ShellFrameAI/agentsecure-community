@@ -46,7 +46,7 @@ For the easiest secret-safe API calls, add the AgentSecure MCP server to your ag
 agentsecure start
 ```
 
-The guided start command initializes the project, offers to import `.env` secrets into the local vault, prints the MCP setup command, and ends with a ready summary.
+The guided start command initializes the project, offers to import `.env` secrets into the local vault, writes AgentSecure instructions into `AGENTS.md`, prints the MCP setup command, and ends with a ready summary.
 
 Manual setup is still available:
 
@@ -115,12 +115,21 @@ This adds `api.example.com` to `network.allow_domains` and `8443` to `network.al
 
 ## MCP Agent Guidance
 
-AgentSecure Community is now MCP-first for developer ergonomics: let the coding agent edit files, install packages, run tests, and use normal tools directly. Use AgentSecure only when a request needs a protected secret.
+AgentSecure Community is MCP-first for developer ergonomics: let the coding agent edit files, install packages, run tests, and use normal tools directly. Use AgentSecure only when a request needs a protected secret.
 
 After importing or adding secrets, attach the MCP server printed by:
 
 ```bash
 agentsecure mcp install codex
+```
+
+`agentsecure start` also creates or updates `AGENTS.md` with bounded AgentSecure guidance. The generated section tells the agent to use `agentsecure.http.request` for secret-bearing API calls, pass placeholders such as `${API_KEY}` and `${API_SECRET}`, and never source `.env` or send `AGENTSECURE_ALIAS_*` / `virt_*` values to APIs.
+
+For a secret-bearing API request, tell the agent to use AgentSecure MCP:
+
+```text
+Use AgentSecure MCP agentsecure.http.request to GET https://api.example.com/v1/whoami.
+Send Authorization: Bearer ${API_KEY}.
 ```
 
 Codex users should run the printed command, which looks like:

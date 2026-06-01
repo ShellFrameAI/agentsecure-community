@@ -112,6 +112,9 @@ from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_
 
 
 INTERACTIVE_AGENT_COMMANDS = set(SUPPORTED_AGENTS)
+AGENTS_MD = "AGENTS.md"
+AGENTSECURE_AGENTS_START = "<!-- agentsecure:start -->"
+AGENTSECURE_AGENTS_END = "<!-- agentsecure:end -->"
 
 
 class LocalGatewayHandle:
@@ -247,6 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--approved-host", "--allow", action="append", default=[], help="Credential destination URL or host to approve")
     start_parser.add_argument("--client", choices=["codex", "claude", "both", "none"], default="codex", help="Agent client to configure")
     start_parser.add_argument("--install-mcp", action="store_true", help="Run codex mcp add when --client is codex or both")
+    start_parser.add_argument("--no-agent-instructions", action="store_true", help="Do not write AgentSecure guidance to AGENTS.md")
     start_parser.add_argument("--yes", action="store_true", help="Use safe defaults without prompting")
     start_parser.add_argument("--json", action="store_true", help="Print machine-readable summary")
 
@@ -723,6 +727,24 @@ def start_onboarding(args: argparse.Namespace) -> int:
         summary["steps"].append({"name": "network", "status": "unchanged"})
         _start_print(args, "Network: no new destinations approved")
 
+    if args.no_agent_instructions:
+        summary["steps"].append({"name": "agent_instructions", "status": "skipped"})
+        _start_print(args, "Agent instructions: skipped")
+    else:
+        agent_instructions = _write_project_agent_instructions(AGENTS_MD)
+        summary["steps"].append(
+            {
+                "name": "agent_instructions",
+                "status": agent_instructions["status"],
+                "path": agent_instructions["path"],
+            }
+        )
+        _start_print(
+            args,
+            "Agent instructions: %s %s"
+            % (agent_instructions["status"], agent_instructions["path"]),
+        )
+
     clients = []
     if args.client == "both":
         clients = ["codex", "claude"]
@@ -749,10 +771,88 @@ def start_onboarding(args: argparse.Namespace) -> int:
     else:
         print("")
         print("Ready.")
-        print("Start your agent normally. For secret API calls, tell it:")
-        print("Use AgentSecure MCP `agentsecure.http.request` with placeholders like ${API_KEY}.")
-        print("Do not read .env for secrets and do not ask me to paste real secrets.")
+        print("Start your agent normally.")
+        if not args.no_agent_instructions:
+            print("Agent instructions were written to %s." % AGENTS_MD)
+        print("For secret API calls, the agent should use AgentSecure MCP `agentsecure.http.request`.")
     return 0
+
+
+def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
+    section = _project_agent_instructions_section()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as handle:
+            current = handle.read()
+        updated = _replace_or_append_agentsecure_section(current, section)
+        status = "unchanged" if updated == current else "updated"
+    else:
+        updated = "# Project Agent Instructions\n\n" + section
+        status = "created"
+
+    if status != "unchanged":
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+    return {"path": path, "status": status}
+
+
+def _replace_or_append_agentsecure_section(current: str, section: str) -> str:
+    start = current.find(AGENTSECURE_AGENTS_START)
+    end = current.find(AGENTSECURE_AGENTS_END)
+    if start != -1 and end != -1 and end > start:
+        end += len(AGENTSECURE_AGENTS_END)
+        prefix = current[:start].rstrip()
+        suffix = current[end:].lstrip("\n")
+        body = section.rstrip()
+        pieces = []
+        if prefix:
+            pieces.append(prefix)
+        pieces.append(body)
+        if suffix:
+            pieces.append(suffix.rstrip())
+        return "\n\n".join(pieces) + "\n"
+    if current.strip():
+        return current.rstrip() + "\n\n" + section
+    return section
+
+
+def _project_agent_instructions_section() -> str:
+    lines = [
+        AGENTSECURE_AGENTS_START,
+        "## AgentSecure Secret Usage",
+        "",
+        "This project uses AgentSecure for secrets.",
+        "",
+        "Real secrets are stored in the local AgentSecure vault. The `.env` file may contain safe placeholders such as `AGENTSECURE_ALIAS_*`, not real credentials.",
+        "",
+        "For any HTTP/API request that needs a secret, you MUST use the MCP tool `agentsecure.http.request`.",
+        "",
+        "Do not use shell `curl` with `.env` secrets.",
+        "Do not source `.env` to get secrets.",
+        "Do not ask the user to paste real secrets.",
+        "Do not send `AGENTSECURE_ALIAS_*` values to APIs.",
+        "Do not send `virt_*` values to APIs.",
+        "",
+        "Use AgentSecure placeholders such as `${API_KEY}`, `${API_SECRET}`, `${DATABASE_URL}`, `${STRIPE_API_KEY}`, and `${APP_SECRET}`.",
+        "",
+        "Example MCP request:",
+        "```json",
+        "{",
+        '  "method": "GET",',
+        '  "url": "https://api.example.com/v1/whoami",',
+        '  "headers": {',
+        '    "Authorization": "Bearer ${API_KEY}",',
+        '    "X-API-Secret": "${API_SECRET}"',
+        "  }",
+        "}",
+        "```",
+        "",
+        "If AgentSecure blocks the destination, show the user the suggested `agentsecure network allow ...` command.",
+        "",
+        "Non-secret requests can use normal tools. Secret-bearing HTTP/API requests must use `agentsecure.http.request`.",
+        AGENTSECURE_AGENTS_END,
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _confirm(prompt: str, default: bool) -> bool:
