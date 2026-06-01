@@ -5,7 +5,7 @@ import threading
 import unittest
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from io import StringIO
+from io import BytesIO, StringIO
 
 from agentsecure.cli.main import main
 from agentsecure.mcp.http_request import perform_http_request
@@ -114,6 +114,39 @@ class McpTest(unittest.TestCase):
                 }
             )
             self.assertIn("content", called["result"])
+
+    def test_stdio_jsonl_framing_used_by_codex(self):
+        with self._project() as project:
+            with redirect_stdout(StringIO()):
+                self.assertEqual(0, main(["--config", project["config_path"], "init"]))
+            server = McpServer(project["config_path"])
+            inbound = BytesIO(
+                b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+            )
+            outbound = BytesIO()
+
+            message = server._read_message(inbound)
+            self.assertEqual("initialize", message["method"])
+            server._write_message(outbound, server.handle(message))
+
+            raw = outbound.getvalue()
+            self.assertTrue(raw.endswith(b"\n"))
+            self.assertNotIn(b"Content-Length", raw)
+            response = json.loads(raw.decode("utf-8"))
+            self.assertEqual("agentsecure", response["result"]["serverInfo"]["name"])
+
+    def test_stdio_content_length_framing_still_supported(self):
+        server = McpServer("agentsecure.json")
+        body = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+        inbound = BytesIO(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        outbound = BytesIO()
+
+        message = server._read_message(inbound)
+        server._write_message(outbound, server.handle(message))
+
+        raw = outbound.getvalue()
+        self.assertIn(b"Content-Length:", raw)
+        self.assertIn(b"agentsecure.http.request", raw)
 
     def test_codex_install_prints_codex_mcp_add_command(self):
         with self._project() as project:

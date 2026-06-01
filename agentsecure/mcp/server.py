@@ -13,6 +13,7 @@ from agentsecure.mcp.runtime import DurationError, SecretAliasError, describe_co
 class McpServer:
     def __init__(self, config_path: str) -> None:
         self.config_path = os.path.abspath(config_path)
+        self._framing = "jsonl"
 
     def serve_stdio(self) -> int:
         while True:
@@ -101,12 +102,24 @@ class McpServer:
         ]
 
     def _read_message(self, stream):
+        first = stream.readline()
+        if not first:
+            return None
+        first_text = first.decode("utf-8", "replace").strip()
+        if not first_text:
+            return None
+        if not first_text.lower().startswith("content-length:"):
+            self._framing = "jsonl"
+            return json.loads(first_text)
+        self._framing = "headers"
         headers = {}
+        key, value = first_text.split(":", 1)
+        headers[key.lower()] = value.strip()
         while True:
             line = stream.readline()
             if not line:
                 return None
-            line = line.decode("ascii", "replace").strip()
+            line = line.decode("utf-8", "replace").strip()
             if not line:
                 break
             if ":" in line:
@@ -119,7 +132,10 @@ class McpServer:
 
     def _write_message(self, stream, message: Dict[str, Any]) -> None:
         data = json.dumps(message, separators=(",", ":")).encode("utf-8")
-        stream.write(("Content-Length: %s\r\n\r\n" % len(data)).encode("ascii") + data)
+        if self._framing == "headers":
+            stream.write(("Content-Length: %s\r\n\r\n" % len(data)).encode("ascii") + data)
+        else:
+            stream.write(data + b"\n")
         stream.flush()
 
     def _result(self, message_id, result):
