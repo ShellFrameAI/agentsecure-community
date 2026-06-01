@@ -47,7 +47,7 @@ agentsecure mcp install codex
 agentsecure mcp install claude
 ```
 
-Those commands print the local MCP configuration for this project. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
+Those commands print the local MCP setup for this project. For Codex, AgentSecure prints a `codex mcp add ...` command. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
 
 ## Where Secrets Go
 
@@ -107,6 +107,12 @@ After importing or adding secrets, attach the MCP server printed by:
 
 ```bash
 agentsecure mcp install codex
+```
+
+Codex users should run the printed command, which looks like:
+
+```bash
+codex mcp add agentsecure -- agentsecure --config /path/to/agentsecure.json mcp serve
 ```
 
 Then tell the agent:

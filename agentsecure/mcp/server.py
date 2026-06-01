@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shlex
 import sys
 from typing import Any, Dict
 
@@ -149,18 +150,20 @@ def handle_mcp(args: argparse.Namespace) -> int:
         return 0
     if command == "install":
         config_path = os.path.abspath(args.config)
+        command_parts = ["agentsecure", "--config", config_path, "mcp", "serve"]
+        if args.client == "codex":
+            print("Run this command to add AgentSecure MCP to Codex:")
+            print("codex mcp add agentsecure -- %s" % " ".join(shlex.quote(part) for part in command_parts))
+            return 0
         snippet = {
             "mcpServers": {
                 "agentsecure": {
-                    "command": "agentsecure",
-                    "args": ["--config", config_path, "mcp", "serve"],
+                    "command": command_parts[0],
+                    "args": command_parts[1:],
                 }
             }
         }
-        if args.client == "codex":
-            print("# Add this MCP server to your Codex MCP configuration:")
-        else:
-            print("# Add this MCP server to your Claude MCP configuration:")
+        print("# Add this MCP server to your Claude MCP configuration:")
         print(json.dumps(snippet, indent=2, sort_keys=True))
         return 0
     sys.stderr.write("agentsecure: missing mcp subcommand\n")

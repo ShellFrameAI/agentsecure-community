@@ -115,6 +115,19 @@ class McpTest(unittest.TestCase):
             )
             self.assertIn("content", called["result"])
 
+    def test_codex_install_prints_codex_mcp_add_command(self):
+        with self._project() as project:
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["--config", project["config_path"], "mcp", "install", "codex"]))
+
+            text = output.getvalue()
+            self.assertIn("codex mcp add agentsecure --", text)
+            self.assertIn("agentsecure --config", text)
+            self.assertIn(project["config_path"], text)
+            self.assertIn("mcp serve", text)
+            self.assertNotIn('"mcpServers"', text)
+
     def _project(self):
         return _ProjectContext()
 
