@@ -14,7 +14,8 @@ class GuardedCommandRunner:
         self._config_path = config_path
 
     def run(self, tool: str, args: List[str]) -> int:
-        denied = GuardedNetworkCommandPolicy(self._config_path).validate(tool, args)
+        network_policy = GuardedNetworkCommandPolicy(self._config_path)
+        denied = network_policy.validate(tool, args)
         if denied is not None:
             sys.stderr.write(
                 "agentsecure: blocked credential-bearing request: %s\n" % denied.reason
@@ -31,6 +32,15 @@ class GuardedCommandRunner:
         original_path = env.get("AGENTSECURE_ORIGINAL_PATH")
         if original_path:
             env["PATH"] = original_path
+        if network_policy.should_proxy(tool, args):
+            proxy_url = env.get("AGENTSECURE_PROXY_URL", "")
+            if proxy_url:
+                env["HTTP_PROXY"] = proxy_url
+                env["HTTPS_PROXY"] = proxy_url
+                env["http_proxy"] = proxy_url
+                env["https_proxy"] = proxy_url
+                env["NO_PROXY"] = ""
+                env["no_proxy"] = ""
 
         process = subprocess.Popen(
             [real_tool] + args,

@@ -4,8 +4,9 @@ import time
 from agentsecure.core.models import SecretGrant
 from agentsecure.implementations.secrets import InMemoryTokenResolver
 from agentsecure.implementations.secrets import GrantAwareTokenResolver
+from agentsecure.implementations.secrets import PolicyAwareTokenResolver
 from agentsecure.implementations.secrets import build_token_map_from_environment
-from agentsecure.core.models import SecretBinding
+from agentsecure.core.models import EnvKeyPolicy, EnvPolicy, SecretBinding
 
 
 class MemoryAudit:
@@ -92,6 +93,46 @@ class GrantAwareTokenResolverTest(unittest.TestCase):
         )
         resolver = GrantAwareTokenResolver(MemorySecretStore(), MemoryGrantStore(grant), audit)
         self.assertEqual("sk-real", resolver.resolve("virt_openai"))
+
+
+class PolicyAwareTokenResolverTest(unittest.TestCase):
+    def test_alias_without_per_alias_hosts_uses_network_policy_gate_only(self):
+        audit = MemoryAudit()
+        delegate = InMemoryTokenResolver({"virt_api": "real-api-key"}, audit)
+        resolver = PolicyAwareTokenResolver(
+            delegate,
+            {
+                "virt_api": SecretBinding(
+                    env_name="API_KEY",
+                    virtual_token="virt_api",
+                    alias_id="api_key",
+                )
+            },
+            EnvPolicy({"API_KEY": EnvKeyPolicy(mode="virtualize")}),
+            audit,
+        )
+
+        self.assertEqual("real-api-key", resolver.resolve("virt_api", {"host": "approved.example.com"}))
+
+    def test_alias_hosts_remain_stricter_override_when_configured(self):
+        audit = MemoryAudit()
+        delegate = InMemoryTokenResolver({"virt_api": "real-api-key"}, audit)
+        resolver = PolicyAwareTokenResolver(
+            delegate,
+            {
+                "virt_api": SecretBinding(
+                    env_name="API_KEY",
+                    virtual_token="virt_api",
+                    alias_id="api_key",
+                    approved_hosts=["approved.example.com"],
+                )
+            },
+            EnvPolicy({"API_KEY": EnvKeyPolicy(mode="virtualize")}),
+            audit,
+        )
+
+        self.assertIsNone(resolver.resolve("virt_api", {"host": "denied.example.com"}))
+        self.assertEqual("secret_resolution_wrong_destination", audit.events[0][0])
 
 
 if __name__ == "__main__":
