@@ -39,6 +39,14 @@ class EncryptedLocalSecretStore(SecretStore):
         except (ValueError, TypeError):
             return None
 
+    def delete(self, secret_id: str) -> bool:
+        data = self._read_raw()
+        if secret_id not in data:
+            return False
+        del data[secret_id]
+        self._write_raw(data)
+        return True
+
     def _cipher_or_raise(self) -> LocalSecretCipher:
         if self._cipher is None:
             raise RuntimeError("encrypted secret store requires a cipher")

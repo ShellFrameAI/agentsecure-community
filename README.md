@@ -8,7 +8,7 @@
 
 AI coding agents run where developer secrets already live: `.env` files, shell environments, MCP configs, local credentials, and project settings. GitGuardian's 2026 State of Secrets Sprawl report found [28.65 million new hardcoded secrets in public GitHub commits in 2025](https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/) and [24,008 unique secrets in MCP-related configuration files, including 2,117 valid credentials](https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/). Reported testing has also shown agent tools reading `.env` files despite ignore-file expectations; [The Register reproduced Claude Code reading `.env` with `.claudeignore` and `.gitignore` entries present](https://www.theregister.com/2026/01/28/claude_code_ai_secrets_files/), while [Anthropic's current docs recommend explicit file-access deny rules for sensitive files](https://code.claude.com/docs/en/configuration).
 
-AgentSecure Community is a local-first CLI for AI coding-agent workflows. It demonstrates a simple idea: ignore files are not a secret boundary, so the agent should see virtual or masked secrets instead of raw `.env` values.
+AgentSecure Community is a local-first CLI for AI coding-agent workflows. It demonstrates a simple idea: ignore files are not a secret boundary, so real secrets should live in AgentSecure's local vault, projects should reference aliases, and the agent should receive temporary virtual tokens instead of raw `.env` values.
 
 The community release is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
 
@@ -40,10 +40,168 @@ python -m pip install agentsecure
 agentsecure demo
 ```
 
-Then run your agent:
+For the easiest secret-safe API calls, add the AgentSecure MCP server to your agent client and run the agent normally:
 
 ```bash
-python3 -m agentsecure run claude
+agentsecure start
+```
+
+The guided start command initializes the project, offers to import `.env` secrets into the local vault, writes AgentSecure instructions into `AGENTS.md`, prints the MCP setup command, and ends with a ready summary.
+
+Manual setup is still available:
+
+```bash
+agentsecure mcp install codex
+agentsecure mcp install claude
+```
+
+Those commands print the local MCP setup for this project. For Codex, AgentSecure prints a `codex mcp add ...` command. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
+
+## Where Secrets Go
+
+Keep real secrets in one local AgentSecure vault:
+
+```bash
+agentsecure secrets import .env
+agentsecure mcp status
+```
+
+Or use the guided setup:
+
+```bash
+agentsecure start --approved-host https://api.example.com
+```
+
+`secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes a private backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders.
+
+Use `--dry-run` to preview the import, or `--keep-file` if you want to store aliases without rewriting `.env`.
+
+To undo the rewrite and bring the original `.env` back from the latest private backup:
+
+```bash
+agentsecure secrets restore .env
+```
+
+During uninstall, AgentSecure offers the same restore before it removes project state:
+
+```bash
+agentsecure uninstall
+```
+
+For non-interactive uninstall, restoring real secrets to the project file stays explicit:
+
+```bash
+agentsecure uninstall --yes --restore-dotenv
+```
+
+For manual control, add one alias at a time:
+
+```bash
+printf '%s' "$DATABASE_URL" | agentsecure secrets add dev_db \
+  --env-name DATABASE_URL \
+  --provider database \
+  --approved-host db.example.com \
+  --real-secret-stdin
+
+agentsecure secrets use dev_db
+agentsecure run -- claude
+```
+
+What this does:
+
+- The real value is stored locally under `~/.agentsecure/vault/`.
+- `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
+- For MCP calls, AgentSecure creates a short-lived fake token such as `virt_database_...`.
+- The MCP request tool swaps placeholders for real secrets only when the destination host and port are allowed by network policy.
+- The fake token is revoked after the MCP request.
+
+Do not put real secrets in project `.env` files. Use `.env` for non-secret config or fake placeholders that are safe for an agent to read.
+
+Approve a destination with its URL when the port is not 80 or 443:
+
+```bash
+agentsecure network allow https://api.example.com:8443/v1/test
+```
+
+This adds `api.example.com` to `network.allow_domains` and `8443` to `network.allow_ports`.
+
+## MCP Agent Guidance
+
+AgentSecure Community is MCP-first for developer ergonomics: let the coding agent edit files, install packages, run tests, and use normal tools directly. Use AgentSecure only when a request needs a protected secret.
+
+After importing or adding secrets, attach the MCP server printed by:
+
+```bash
+agentsecure mcp install codex
+```
+
+`agentsecure start` also creates or updates `AGENTS.md` with bounded AgentSecure guidance. The generated section tells the agent to use `agentsecure.http.request` for secret-bearing API calls, pass placeholders such as `${API_KEY}` and `${API_SECRET}`, and never source `.env` or send `AGENTSECURE_ALIAS_*` / `virt_*` values to APIs.
+
+For a secret-bearing API request, tell the agent to use AgentSecure MCP:
+
+```text
+Use AgentSecure MCP agentsecure.http.request to GET https://api.example.com/v1/whoami.
+Send Authorization: Bearer ${API_KEY}.
+```
+
+Codex users should run the printed command, which looks like:
+
+```bash
+codex mcp add agentsecure -- agentsecure --config /path/to/agentsecure.json mcp serve
+```
+
+Then tell the agent:
+
+```text
+For API calls that need secrets, use the AgentSecure MCP tool `agentsecure.http.request`.
+Use placeholders such as ${API_KEY} and ${API_SECRET}; never ask me to paste real secrets and never read .env for secrets.
+If AgentSecure blocks the destination, show me the suggested `agentsecure network allow ...` command.
+```
+
+Example MCP tool arguments:
+
+```json
+{
+  "method": "GET",
+  "url": "https://api.example.com/v1/whoami",
+  "headers": {
+    "Authorization": "Bearer ${API_KEY}",
+    "X-Api-Secret": "${API_SECRET}"
+  }
+}
+```
+
+What happens:
+
+- The agent sees only placeholder names such as `API_KEY`.
+- AgentSecure checks `agentsecure.json` network policy before resolving anything.
+- AgentSecure sends the request itself with real secrets only to approved destinations.
+- The response is sanitized before it is returned to the agent.
+- Local audit logs record the destination, placeholders, policy decision, and status without raw secret values.
+
+For non-secret requests, the agent should use normal `curl`, SDKs, tests, or application code. The MCP tool intentionally blocks calls that do not contain `${ENV_NAME}` placeholders so AgentSecure does not become a general network proxy.
+
+## Optional Agent Run Guidance
+
+`agentsecure run` is still available when you want command wrappers, output masking, or safe workspaces around a whole local process:
+
+```bash
+agentsecure run -- claude
+```
+
+Every `agentsecure run` creates a small per-run guide under `.agentsecure/runs/` and prints its relative path:
+
+```text
+AgentSecure agent guide: .agentsecure/runs/run_.../AGENTSECURE_AGENT_GUIDE.md
+```
+
+The launched agent receives the absolute guide path in both `AGENTSECURE_AGENT_GUIDE` and `AGENTSECURE_SKILL_FILE`. The file contains only operational guidance and safe metadata, such as managed secret environment variable names, providers, and approved hosts from runtime alias bindings when available. It does not include raw secrets or virtual token values.
+
+Agents should use the injected environment variables and virtual tokens. They should not read `.env` to recover secrets or ask a human to paste secrets. If an expected secret env var is missing, ask the user to run:
+
+```bash
+agentsecure secrets import .env
+agentsecure secrets use <alias>
 ```
 
 ## What The Demo Shows
@@ -79,12 +237,12 @@ This creates `agentsecure.json`, local private state under `.agentsecure/`, and 
 agentsecure policy validate
 ```
 
-Create a fake `.env` for testing:
+Create a fake `.env` for testing. This file must not contain real credentials:
 
 ```bash
 cat > .env <<'EOF'
-OPENAI_API_KEY=sk-demo-local-secret-do-not-use
-DATABASE_URL_PROD=postgres://demo:demo-password@example.invalid/app
+OPENAI_API_KEY=fake-openai-key-for-demo-only
+DATABASE_URL_PROD=postgres://fake:fake-password@example.invalid/app
 EOF
 ```
 
@@ -94,13 +252,25 @@ Discover likely secrets:
 agentsecure discover
 ```
 
+For real credentials, use the vault/alias flow:
+
+```bash
+printf '%s' "$OPENAI_API_KEY" | agentsecure secrets add openai_dev \
+  --env-name OPENAI_API_KEY \
+  --provider openai \
+  --approved-host api.openai.com \
+  --real-secret-stdin
+
+agentsecure secrets use openai_dev
+```
+
 Run a command through the local guard:
 
 ```bash
 agentsecure run --protect-all -- python3 -c 'import subprocess; print(subprocess.check_output(["cat", ".env"]).decode())'
 ```
 
-By default, `--protect-all` virtualizes discovered secrets. The command output should contain `virt_...` tokens instead of the real values. The real `.env` remains local and unchanged.
+By default, `--protect-all` virtualizes discovered values. Prefer the `agentsecure secrets add/use` flow above for real secrets because it keeps real values out of project files entirely. The command output should contain `virt_...` tokens instead of real values. The real `.env`, if you still have one, remains local and unchanged.
 
 Denied values are removed only when policy sets `mode: "deny"` for that environment variable. The built-in `agentsecure demo` includes that policy for `DATABASE_URL_PROD` so you can see both behaviors: virtualize and deny.
 
@@ -153,7 +323,8 @@ Provider proxy mode is local-only. It is not a system-wide proxy, not TLS MITM, 
 ## What It Demonstrates
 
 - Discover likely secrets in `.env` files and environment variables.
-- Store real values locally under `.agentsecure/`.
+- Store reusable real secrets locally under `~/.agentsecure/vault/`.
+- Store project assignments as alias metadata in `agentsecure.json`.
 - Expose virtual values such as `OPENAI_API_KEY=virt_openai_...`.
 - Sanitize common `.env` reads through command-guard mode.
 - Remove denied env values from agent-visible output.
@@ -169,6 +340,15 @@ Minimal policy shape:
 
 ```json
 {
+  "secret_aliases": [
+    {
+      "alias_id": "openai_dev",
+      "env_name": "OPENAI_API_KEY",
+      "provider": "openai",
+      "approved_hosts": ["api.openai.com"],
+      "mode": "virtualize"
+    }
+  ],
   "env_policy": {
     "OPENAI_API_KEY": {
       "mode": "virtualize",
@@ -198,6 +378,9 @@ agentsecure doctor
 agentsecure discover
 agentsecure suggest
 agentsecure env
+agentsecure secrets add dev_db --env-name DATABASE_URL --provider database --approved-host db.example.com --real-secret-stdin
+agentsecure secrets use dev_db
+agentsecure secrets list
 agentsecure keys list
 agentsecure network list
 agentsecure proxy setup openai
@@ -252,6 +435,7 @@ Planned public demo assets:
 agentsecure/
   cli/                 CLI entry point
   core/                models, config loading, policy helpers
+  mcp/                 MCP tools for approved secret-bearing HTTP calls
   guard/               local command guard and output sanitizer
   discovery/           local secret discovery
   implementations/     local secret, grant, policy, and audit storage

@@ -13,3 +13,5 @@ class SecretStore(ABC):
     def get(self, secret_id: str) -> Optional[str]:
         pass
 
+    def delete(self, secret_id: str) -> bool:
+        return False

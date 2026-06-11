@@ -1,9 +1,11 @@
 import argparse
 import hashlib
 import getpass
+import ipaddress
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -11,7 +13,11 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
+from contextlib import redirect_stdout
+from io import StringIO
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from agentsecure import __version__
@@ -22,8 +28,10 @@ from agentsecure.cli.common import (
     cloud_features_disabled as _cloud_features_disabled,
     cloud_features_enabled as _cloud_features_enabled,
     scanner as _scanner,
+    update_allowed_domains,
 )
 from agentsecure.cli.demo import run_demo
+from agentsecure.mcp.server import add_mcp_subparser, codex_mcp_add_command, handle_mcp, mcp_install_instructions
 from agentsecure.cli.policy import add_policy_subparser, handle_policy
 from agentsecure.cli.project import (
     _profile_label,
@@ -36,6 +44,7 @@ from agentsecure.cli.project import (
 from agentsecure.cli.proxy import add_proxy_subparser, handle_proxy
 from agentsecure.cli.receipts import handle_receipts
 from agentsecure.cli.secrets import (
+    _read_real_secret,
     discover_secrets,
     handle_keys,
     print_env,
@@ -51,6 +60,12 @@ from agentsecure.cli.settings import (
 )
 from agentsecure.client.wrappers import AgentWrapperInstaller, SUPPORTED_AGENTS
 from agentsecure.core.agentsecure_md import AGENTSECURE_MD, agentsecure_md_status
+from agentsecure.core.agent_guidance import (
+    ENV_AGENT_GUIDE,
+    ENV_SKILL_FILE,
+    relative_agent_guidance_path,
+    write_agent_guidance,
+)
 from agentsecure.core.command_metadata import safe_command_metadata
 from agentsecure.core.config import ConfigError, JsonConfigLoader, JsonConfigWriter
 from agentsecure.core.config_profiles import (
@@ -60,9 +75,17 @@ from agentsecure.core.config_profiles import (
 from agentsecure.core.capabilities import broker_url_for_env
 from agentsecure.core.container import Container
 from agentsecure.core.key_service import KeyManagementError, KeyManagementService
-from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretReplacement
+from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretBinding, SecretReplacement
 from agentsecure.core.provider_proxy import configured_provider_base_url, provider_base_local_path
+from agentsecure.core.dotenv_backups import backup_dotenv_to_vault, latest_dotenv_backup, restore_dotenv_backup
 from agentsecure.core.product import ProductService
+from agentsecure.core.runtime_bindings import ENV_RUNTIME_BINDINGS, serialize_runtime_bindings
+from agentsecure.core.secret_aliases import (
+    SecretAliasError,
+    SecretAliasService,
+    local_secret_alias_store_for_home,
+    project_id_for_path,
+)
 from agentsecure.core.time import DurationError
 from agentsecure.daemon.commands import CommandExecutor, CommandPoller
 from agentsecure.daemon.policies import PolicyApplier
@@ -78,14 +101,21 @@ from agentsecure.guard.sanitizer import SecretOutputSanitizer
 from agentsecure.guard.wrappers import CommandGuardWrapperInstaller
 from agentsecure.gateway.proxy import LocalGateway
 from agentsecure.implementations.audit import JsonLineAuditLogger
-from agentsecure.implementations.grant_store import LocalJsonGrantStore
-from agentsecure.implementations.secret_store_factory import encrypted_secret_store_for_config
+from agentsecure.implementations.grant_store import LocalJsonGrantStore, local_grant_store_for_config
+from agentsecure.implementations.secret_store_factory import (
+    agentsecure_home,
+    encrypted_secret_store_for_config,
+    encrypted_secret_store_for_vault,
+)
 from agentsecure.workspace.apply import WorkspaceApplier
 from agentsecure.workspace.diff import WorkspaceDiff
 from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_writable
 
 
 INTERACTIVE_AGENT_COMMANDS = set(SUPPORTED_AGENTS)
+AGENTS_MD = "AGENTS.md"
+AGENTSECURE_AGENTS_START = "<!-- agentsecure:start -->"
+AGENTSECURE_AGENTS_END = "<!-- agentsecure:end -->"
 
 
 class LocalGatewayHandle:
@@ -103,6 +133,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "run":
         return run_agent(args)
+    if args.command == "start":
+        return start_onboarding(args)
     if args.command == "gateway":
         return run_gateway(args)
     if args.command == "daemon":
@@ -111,6 +143,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return print_env(args)
     if args.command == "keys":
         return handle_keys(args)
+    if args.command == "secrets":
+        return handle_secret_aliases(args)
     if args.command == "discover":
         return discover_secrets(args)
     if args.command == "suggest":
@@ -136,6 +170,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return handle_network(args)
     if args.command == "proxy":
         return handle_proxy(args)
+    if args.command == "mcp":
+        return handle_mcp(args)
     if args.command == "receipts":
         return handle_receipts(args)
     if args.command == "policy":
@@ -183,6 +219,23 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--read-only-workspace", action="store_true", help="Make the safe workspace read-only")
     run_parser.add_argument("--no-new-files", action="store_true", help="Block creating, deleting, or renaming files in the safe workspace")
     run_parser.add_argument(
+        "--allow-loopback-proxy-bypass",
+        action="store_true",
+        help="Allow direct 127.0.0.1/localhost connections when strict proxy is enabled",
+    )
+    run_parser.add_argument(
+        "--allow-private-proxy-bypass",
+        action="append",
+        default=[],
+        metavar="PRIVATE_IP",
+        help="Allow direct connections to one private IP when strict proxy is enabled",
+    )
+    run_parser.add_argument(
+        "--strict-proxy",
+        action="store_true",
+        help="Route general HTTP(S) traffic through the AgentSecure gateway. Command-guard leaves general traffic direct by default.",
+    )
+    run_parser.add_argument(
         "--workspace-mode",
         choices=["symlink", "copy"],
         default="symlink",
@@ -190,6 +243,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--ttl", default="2h", help="Grant duration for protected discovered secrets")
     run_parser.add_argument("agent_command", nargs=argparse.REMAINDER)
+
+    start_parser = subparsers.add_parser("start", help="Guided setup for vault secrets and MCP")
+    start_parser.add_argument("--dotenv", default=".env", help="Dotenv file to import, default .env")
+    start_parser.add_argument("--skip-import", action="store_true", help="Do not import dotenv secrets")
+    start_parser.add_argument("--keep-file", action="store_true", help="Store secrets without rewriting the dotenv file")
+    start_parser.add_argument("--approved-host", "--allow", action="append", default=[], help="Credential destination URL or host to approve")
+    start_parser.add_argument("--client", choices=["codex", "claude", "both", "none"], default="codex", help="Agent client to configure")
+    start_parser.add_argument("--install-mcp", action="store_true", help="Run codex mcp add when --client is codex or both")
+    start_parser.add_argument("--no-agent-instructions", action="store_true", help="Do not write AgentSecure guidance to AGENTS.md")
+    start_parser.add_argument("--yes", action="store_true", help="Use safe defaults without prompting")
+    start_parser.add_argument("--json", action="store_true", help="Print machine-readable summary")
 
     subparsers.add_parser("gateway", help="Run only the local gateway")
     subparsers.add_parser("env", help="Print virtual environment variables")
@@ -207,6 +271,33 @@ def build_parser() -> argparse.ArgumentParser:
     keys_subparsers.add_parser("list", help="List virtual key grants")
     revoke_parser = keys_subparsers.add_parser("revoke", help="Revoke a virtual key")
     revoke_parser.add_argument("virtual_token")
+
+    secrets_parser = subparsers.add_parser("secrets", help="Manage central local secret aliases")
+    secrets_subparsers = secrets_parser.add_subparsers(dest="secrets_command")
+    add_secret_parser = secrets_subparsers.add_parser("add", help="Store a real secret once under a local alias")
+    add_secret_parser.add_argument("alias_id", help="Stable local alias, such as dev_db or facebook_app")
+    add_secret_parser.add_argument("--env-name", required=True, help="Environment variable exposed during runs")
+    add_secret_parser.add_argument("--provider", default="custom", help="Provider label")
+    add_secret_parser.add_argument("--inject-as", default="authorization_bearer", help="Credential injection mode")
+    add_secret_parser.add_argument("--name", default="", help="Human-readable alias label")
+    add_secret_parser.add_argument("--approved-host", action="append", default=[], help="Host allowed to receive this alias")
+    add_secret_parser.add_argument("--real-secret-env", help="Read the real secret from this local environment variable")
+    add_secret_parser.add_argument("--real-secret-stdin", action="store_true", help="Read the real secret from stdin")
+    secrets_subparsers.add_parser("list", help="List local secret aliases without printing secret values")
+    use_secret_parser = secrets_subparsers.add_parser("use", help="Assign aliases to this project")
+    use_secret_parser.add_argument("alias_ids", nargs="+")
+    use_secret_parser.add_argument("--project", default="", help="Project name for audit metadata")
+    import_secret_parser = secrets_subparsers.add_parser("import", help="Move secrets from a dotenv file into the local vault")
+    import_secret_parser.add_argument("path", nargs="?", default=".env", help="Dotenv file to import, default .env")
+    import_secret_parser.add_argument("--project", default="", help="Project name for audit metadata")
+    import_secret_parser.add_argument("--approved-host", action="append", default=[], help="Additional host allowed to receive imported secrets")
+    import_secret_parser.add_argument("--keep-file", action="store_true", help="Do not rewrite the dotenv file after importing")
+    import_secret_parser.add_argument("--no-backup", action="store_true", help="Do not store a local backup before rewriting")
+    import_secret_parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without writing changes")
+    restore_secret_parser = secrets_subparsers.add_parser("restore", help="Restore a dotenv file from the latest AgentSecure backup")
+    restore_secret_parser.add_argument("path", nargs="?", default=".env", help="Dotenv file to restore, default .env")
+    restore_secret_parser.add_argument("--backup", default="", help="Specific backup file to restore instead of the latest backup")
+    restore_secret_parser.add_argument("--dry-run", action="store_true", help="Show which backup would be restored")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -231,6 +322,9 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall_parser = subparsers.add_parser("uninstall", help="Remove AgentSecure from this project and user bin")
     uninstall_parser.add_argument("--yes", action="store_true", help="Confirm removal without prompting")
     uninstall_parser.add_argument("--install-dir", default=os.path.expanduser("~/.agentsecure/bin"), help="AgentSecure user bin directory")
+    uninstall_parser.add_argument("--dotenv", default=".env", help="Dotenv file to restore before uninstalling, default .env")
+    uninstall_parser.add_argument("--restore-dotenv", action="store_true", help="Restore dotenv from the latest AgentSecure backup without prompting")
+    uninstall_parser.add_argument("--no-restore-dotenv", action="store_true", help="Do not offer to restore dotenv during uninstall")
 
     files_parser = subparsers.add_parser("files", help="Manage write-protected files")
     files_subparsers = files_parser.add_subparsers(dest="files_command")
@@ -248,6 +342,7 @@ def build_parser() -> argparse.ArgumentParser:
     network_remove_parser = network_subparsers.add_parser("remove", help="Remove domains from credential allowlist")
     network_remove_parser.add_argument("domains", nargs="+")
 
+    add_mcp_subparser(subparsers)
     add_proxy_subparser(subparsers)
     receipts_parser = subparsers.add_parser("receipts", help="Run replayable AgentSecure proof receipts")
     receipts_parser.add_argument("--proxy", action="store_true", help="Run provider proxy receipts")
@@ -280,6 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_agent(args: argparse.Namespace) -> int:
+    run_id = "run_" + uuid.uuid4().hex[:16]
+    project_id = project_id_for_path(args.config)
     policy_doc = agentsecure_md_status(AGENTSECURE_MD)
     if policy_doc.get("exists"):
         state = "valid" if policy_doc.get("ok") else "needs review"
@@ -295,9 +392,29 @@ def run_agent(args: argparse.Namespace) -> int:
         replacements = protect_secrets(args)
         if isinstance(replacements, int):
             return replacements
-    container = Container.from_config_path(args.config)
+    if not os.path.exists(args.config):
+        ProductService(args.config, _scanner()).init_project()
+    try:
+        initial_config = JsonConfigLoader().load(args.config)
+    except FileNotFoundError:
+        initial_config = AgentSecureConfig()
+    alias_runtime_bindings = []
+    if initial_config.secret_aliases:
+        try:
+            alias_runtime_bindings = _secret_alias_service(args.config).prepare_run_bindings(
+                initial_config.secret_aliases,
+                args.ttl,
+                project_id,
+                run_id,
+            )
+        except (DurationError, SecretAliasError) as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
+    runtime_bindings = alias_runtime_bindings
+    container = Container.from_config_path(args.config, runtime_bindings=runtime_bindings, run_id=run_id)
     replacements.extend(_configured_secret_replacements(container, replacements))
-    run_cwd = os.getcwd()
+    source_root = os.getcwd()
+    run_cwd = source_root
     workspace_session = None
     materializer = WorkspaceMaterializer(_workspace_base_for_runtime(run_cwd, args.runtime))
     should_create_workspace = bool(replacements or container.config.files.protect_write)
@@ -349,7 +466,7 @@ def run_agent(args: argparse.Namespace) -> int:
         sys.stderr.write("agentsecure: missing agent command\n")
         return 2
 
-    daemon = _running_daemon()
+    daemon = None if runtime_bindings else _running_daemon()
     daemon_session = None
     gateway_handle = None
     if daemon:
@@ -379,13 +496,53 @@ def run_agent(args: argparse.Namespace) -> int:
         env.pop(env_name, None)
     _strip_backing_secret_environment(env, container)
     env.update(container.virtual_env_provider.build_environment())
+    if runtime_bindings:
+        env[ENV_RUNTIME_BINDINGS] = serialize_runtime_bindings(runtime_bindings)
+        env["AGENTSECURE_RUN_ID"] = run_id
+        env["AGENTSECURE_PROJECT_ID"] = project_id
+    try:
+        agent_guide_path = write_agent_guidance(source_root, run_id, runtime_bindings)
+    except OSError as exc:
+        sys.stderr.write("agentsecure: failed to create agent guidance file: %s\n" % exc)
+        return 1
+    env[ENV_SKILL_FILE] = agent_guide_path
+    env[ENV_AGENT_GUIDE] = agent_guide_path
+    relative_guide_path = relative_agent_guidance_path(source_root, agent_guide_path)
+    container.audit_logger.record(
+        "agent_guidance_created",
+        {
+            "run_id": run_id,
+            "project_id": project_id,
+            "path": relative_guide_path,
+            "aliases": [binding.alias_id or binding.env_name for binding in runtime_bindings],
+        },
+    )
+    print("AgentSecure agent guide: %s" % relative_guide_path, flush=True)
     if args.runtime == "command-guard":
         CommandGuardWrapperInstaller(args.config).install(env)
     session_id = daemon_session.get("session_id", "") if daemon_session else ""
     if session_id:
         env["AGENTSECURE_SESSION_ID"] = session_id
     proxy_url = _proxy_url(gateway_host, gateway_port, session_id)
-    _apply_proxy_environment(env, proxy_url)
+    env["AGENTSECURE_PROXY_URL"] = proxy_url
+    proxy_enabled = bool(getattr(args, "strict_proxy", False) or args.runtime == "workspace")
+    if proxy_enabled:
+        try:
+            _apply_proxy_environment(
+                env,
+                proxy_url,
+                allow_loopback_bypass=getattr(args, "allow_loopback_proxy_bypass", False),
+                private_bypass_hosts=getattr(args, "allow_private_proxy_bypass", []),
+            )
+        except ValueError as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
+    else:
+        try:
+            _validate_private_proxy_bypass_hosts(getattr(args, "allow_private_proxy_bypass", []))
+        except ValueError as exc:
+            sys.stderr.write("agentsecure: %s\n" % exc)
+            return 2
     _apply_provider_proxy_environment(env, container, gateway_host, gateway_port)
     command_metadata = safe_command_metadata(argv)
     container.audit_logger.record(
@@ -393,7 +550,7 @@ def run_agent(args: argparse.Namespace) -> int:
         {
             "argv": command_metadata["argv"],
             "argc": command_metadata["argc"],
-            "proxy": proxy_url,
+            "proxy": proxy_url if proxy_enabled else "",
             "cwd": run_cwd,
             "workspace": workspace_session.workspace_root if workspace_session else "",
             "project": project_name,
@@ -477,6 +634,8 @@ def run_agent(args: argparse.Namespace) -> int:
                 _execute_cloud_response_commands(cloud, command_executor, finish_response)
         return exit_code
     finally:
+        if runtime_bindings:
+            _revoke_runtime_bindings(args.config, runtime_bindings, run_id)
         if command_poller:
             command_poller.stop()
         if daemon and daemon_session and not session_finished:
@@ -495,11 +654,274 @@ def run_agent(args: argparse.Namespace) -> int:
             )
 
 
+def start_onboarding(args: argparse.Namespace) -> int:
+    config_path = os.path.abspath(args.config)
+    dotenv_path = os.path.abspath(args.dotenv)
+    summary = {
+        "ready": False,
+        "config_path": config_path,
+        "dotenv": args.dotenv,
+        "steps": [],
+        "mcp": {},
+    }
+    if not args.json:
+        print("AgentSecure start")
+        print("Project: %s" % os.getcwd())
+
+    if not os.path.exists(config_path):
+        ProductService(config_path, _scanner()).init_project()
+        summary["steps"].append({"name": "config", "status": "created"})
+        _start_print(args, "Config: created %s" % args.config)
+    else:
+        summary["steps"].append({"name": "config", "status": "exists"})
+        _start_print(args, "Config: found %s" % args.config)
+
+    if args.skip_import:
+        summary["steps"].append({"name": "secrets", "status": "skipped"})
+        _start_print(args, "Secrets: skipped import")
+    elif os.path.exists(dotenv_path):
+        if args.yes or _confirm("Import real secrets from %s into the local AgentSecure vault?" % args.dotenv, True):
+            import_args = argparse.Namespace(
+                config=config_path,
+                path=args.dotenv,
+                project=os.path.basename(os.getcwd()) or "default",
+                approved_host=list(args.approved_host or []),
+                keep_file=args.keep_file,
+                no_backup=False,
+                dry_run=False,
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                code = import_secret_aliases(import_args)
+            if code != 0:
+                return code
+            imported = _json_or_empty(output.getvalue())
+            count = len(imported.get("imported", []))
+            summary["steps"].append(
+                {
+                    "name": "secrets",
+                    "status": "imported",
+                    "count": count,
+                    "rewritten": bool(imported.get("rewritten", False)),
+                    "backup": imported.get("backup", ""),
+                }
+            )
+            message = "Secrets: imported %s from %s into local vault" % (count, args.dotenv)
+            if imported.get("rewritten"):
+                message += " and rewrote %s with safe placeholders" % args.dotenv
+            _start_print(args, message)
+            if imported.get("backup"):
+                _start_print(args, "Backup: %s" % imported.get("backup"))
+        else:
+            summary["steps"].append({"name": "secrets", "status": "not_imported"})
+            _start_print(args, "Secrets: not imported")
+    else:
+        summary["steps"].append({"name": "secrets", "status": "no_dotenv"})
+        _start_print(args, "Secrets: no %s file found" % args.dotenv)
+
+    if args.approved_host:
+        output = StringIO()
+        with redirect_stdout(output):
+            code = update_allowed_domains(config_path, args.approved_host, add=True)
+        if code != 0:
+            return code
+        summary["steps"].append({"name": "network", "status": "updated", "approved": list(args.approved_host)})
+        _start_print(args, "Network: approved %s" % ", ".join(args.approved_host))
+    else:
+        summary["steps"].append({"name": "network", "status": "unchanged"})
+        _start_print(args, "Network: no new destinations approved")
+
+    if args.no_agent_instructions:
+        summary["steps"].append({"name": "agent_instructions", "status": "skipped"})
+        _start_print(args, "Agent instructions: skipped")
+    else:
+        agent_instructions = _write_project_agent_instructions(AGENTS_MD)
+        summary["steps"].append(
+            {
+                "name": "agent_instructions",
+                "status": agent_instructions["status"],
+                "path": agent_instructions["path"],
+            }
+        )
+        _start_print(
+            args,
+            "Agent instructions: %s %s"
+            % (agent_instructions["status"], agent_instructions["path"]),
+        )
+
+    clients = []
+    if args.client == "both":
+        clients = ["codex", "claude"]
+    elif args.client != "none":
+        clients = [args.client]
+    instructions = {}
+    for client in clients:
+        text = mcp_install_instructions(client, config_path)
+        instructions[client] = text
+        if client == "codex" and args.install_mcp:
+            install_result = _run_codex_mcp_add(config_path)
+            summary["mcp"]["codex_install"] = install_result
+            if install_result["ok"]:
+                _start_print(args, "MCP: installed AgentSecure in Codex")
+            else:
+                _start_print(args, "MCP: Codex install failed (%s)" % install_result["error"])
+        _start_print(args, "")
+        _start_print(args, text)
+    summary["mcp"]["instructions"] = instructions
+    summary["ready"] = True
+
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print("")
+        print("Ready.")
+        print("Start your agent normally.")
+        if not args.no_agent_instructions:
+            print("Agent instructions were written to %s." % AGENTS_MD)
+        print("For secret API calls, the agent should use AgentSecure MCP `agentsecure.http.request`.")
+    return 0
+
+
+def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
+    section = _project_agent_instructions_section()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as handle:
+            current = handle.read()
+        updated = _replace_or_append_agentsecure_section(current, section)
+        status = "unchanged" if updated == current else "updated"
+    else:
+        updated = "# Project Agent Instructions\n\n" + section
+        status = "created"
+
+    if status != "unchanged":
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(updated)
+    return {"path": path, "status": status}
+
+
+def _replace_or_append_agentsecure_section(current: str, section: str) -> str:
+    start = current.find(AGENTSECURE_AGENTS_START)
+    end = current.find(AGENTSECURE_AGENTS_END)
+    if start != -1 and end != -1 and end > start:
+        end += len(AGENTSECURE_AGENTS_END)
+        prefix = current[:start].rstrip()
+        suffix = current[end:].lstrip("\n")
+        body = section.rstrip()
+        pieces = []
+        if prefix:
+            pieces.append(prefix)
+        pieces.append(body)
+        if suffix:
+            pieces.append(suffix.rstrip())
+        return "\n\n".join(pieces) + "\n"
+    if current.strip():
+        return current.rstrip() + "\n\n" + section
+    return section
+
+
+def _project_agent_instructions_section() -> str:
+    lines = [
+        AGENTSECURE_AGENTS_START,
+        "## AgentSecure Secret Usage",
+        "",
+        "This project uses AgentSecure for secrets.",
+        "",
+        "Real secrets are stored in the local AgentSecure vault. The `.env` file may contain safe placeholders such as `AGENTSECURE_ALIAS_*`, not real credentials.",
+        "",
+        "For any HTTP/API request that needs a secret, you MUST use the MCP tool `agentsecure.http.request`.",
+        "",
+        "Do not use shell `curl` with `.env` secrets.",
+        "Do not source `.env` to get secrets.",
+        "Do not ask the user to paste real secrets.",
+        "Do not send `AGENTSECURE_ALIAS_*` values to APIs.",
+        "Do not send `virt_*` values to APIs.",
+        "",
+        "Use AgentSecure placeholders such as `${API_KEY}`, `${API_SECRET}`, `${DATABASE_URL}`, `${STRIPE_API_KEY}`, and `${APP_SECRET}`.",
+        "",
+        "Example MCP request:",
+        "```json",
+        "{",
+        '  "method": "GET",',
+        '  "url": "https://api.example.com/v1/whoami",',
+        '  "headers": {',
+        '    "Authorization": "Bearer ${API_KEY}",',
+        '    "X-API-Secret": "${API_SECRET}"',
+        "  }",
+        "}",
+        "```",
+        "",
+        "If AgentSecure blocks the destination, show the user the suggested `agentsecure network allow ...` command.",
+        "",
+        "Non-secret requests can use normal tools. Secret-bearing HTTP/API requests must use `agentsecure.http.request`.",
+        AGENTSECURE_AGENTS_END,
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _confirm(prompt: str, default: bool) -> bool:
+    suffix = " [Y/n] " if default else " [y/N] "
+    if not sys.stdin.isatty():
+        return default
+    answer = input(prompt + suffix).strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def _json_or_empty(value: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _start_print(args: argparse.Namespace, message: str) -> None:
+    if not args.json:
+        print(message)
+
+
+def _run_codex_mcp_add(config_path: str) -> Dict[str, Any]:
+    command = ["codex", "mcp", "add", "agentsecure", "--"] + [
+        "agentsecure",
+        "--config",
+        os.path.abspath(config_path),
+        "mcp",
+        "serve",
+    ]
+    try:
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "command": codex_mcp_add_command(config_path), "error": str(exc)}
+    return {
+        "ok": process.returncode == 0,
+        "command": codex_mcp_add_command(config_path),
+        "returncode": process.returncode,
+        "stdout": process.stdout.strip(),
+        "stderr": process.stderr.strip(),
+        "error": process.stderr.strip() if process.returncode else "",
+    }
+
+
 def _workspace_base_for_runtime(source_root: str, runtime: str) -> str:
     if runtime != "workspace":
         return ".agentsecure/workspaces"
     digest = hashlib.sha256(os.path.abspath(source_root).encode("utf-8")).hexdigest()[:16]
     return os.path.join(tempfile.gettempdir(), "agentsecure-workspaces", digest)
+
+
+def _revoke_runtime_bindings(config_path: str, bindings: List[SecretBinding], run_id: str) -> None:
+    grant_store = local_grant_store_for_config(config_path)
+    revoked = []
+    for binding in bindings:
+        if grant_store.revoke(binding.virtual_token):
+            revoked.append(binding.alias_id or binding.env_name)
+    if revoked:
+        JsonLineAuditLogger(".agentsecure/audit.log").record(
+            "run_secret_revoked",
+            {"run_id": run_id, "secrets": revoked},
+        )
 
 
 def _start_agent_process(argv: List[str], env, cwd: str, sanitize_output: bool = False):
@@ -514,6 +936,8 @@ def _should_preserve_interactive_tty(argv: List[str]) -> bool:
     if not argv or not _stdio_is_tty():
         return False
     command = os.path.basename(argv[0])
+    if command == "ollama" and len(argv) >= 2 and argv[1] == "launch":
+        return not any(arg in ("-h", "--help") for arg in argv[2:])
     if command not in INTERACTIVE_AGENT_COMMANDS:
         return False
     return len(argv) == 1
@@ -680,6 +1104,8 @@ def _start_local_gateway_thread(container: Container, host: str, port: int):
         container.audit_logger,
         container.bindings,
         container.config.provider_proxy,
+        container.project_id,
+        container.run_id,
     )
 
     def run_gateway_thread() -> None:
@@ -854,14 +1280,28 @@ def _try_cloud_sync(
         return {}
 
 
-def _apply_proxy_environment(env, proxy_url: str) -> None:
+def _apply_proxy_environment(
+    env,
+    proxy_url: str,
+    allow_loopback_bypass: bool = False,
+    private_bypass_hosts: Optional[List[str]] = None,
+) -> None:
     env["HTTP_PROXY"] = proxy_url
     env["HTTPS_PROXY"] = proxy_url
     env["http_proxy"] = proxy_url
     env["https_proxy"] = proxy_url
-    no_proxy = _merge_no_proxy(env.get("NO_PROXY") or env.get("no_proxy") or "")
+    no_proxy = _merge_no_proxy(
+        env.get("NO_PROXY") or env.get("no_proxy") or "",
+        include_defaults=allow_loopback_bypass,
+        private_bypass_hosts=private_bypass_hosts,
+    )
     env["NO_PROXY"] = no_proxy
     env["no_proxy"] = no_proxy
+
+
+def _validate_private_proxy_bypass_hosts(private_bypass_hosts: Optional[List[str]] = None) -> None:
+    for host in private_bypass_hosts or []:
+        _normalize_private_proxy_bypass_host(host)
 
 
 def _apply_provider_proxy_environment(env, container: Container, gateway_host: str, gateway_port: int) -> None:
@@ -917,7 +1357,11 @@ def _configured_secret_replacements(container: Container, existing: List[SecretR
     return replacements
 
 
-def _merge_no_proxy(existing: str) -> str:
+def _merge_no_proxy(
+    existing: str,
+    include_defaults: bool = True,
+    private_bypass_hosts: Optional[List[str]] = None,
+) -> str:
     defaults = [
         "localhost",
         "127.0.0.1",
@@ -928,7 +1372,11 @@ def _merge_no_proxy(existing: str) -> str:
     ]
     values = []
     seen = set()
-    for raw in existing.split(",") + defaults:
+    extras = defaults if include_defaults else []
+    extras = list(extras)
+    for host in private_bypass_hosts or []:
+        extras.append(_normalize_private_proxy_bypass_host(host))
+    for raw in existing.split(",") + extras:
         value = raw.strip()
         if not value:
             continue
@@ -939,6 +1387,24 @@ def _merge_no_proxy(existing: str) -> str:
             values.append(value)
             seen.add(key)
     return ",".join(values)
+
+
+def _normalize_private_proxy_bypass_host(value: str) -> str:
+    host = str(value).strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    host = host.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if host.startswith("[") and "]" in host:
+        host = host[1:].split("]", 1)[0]
+    elif ":" in host:
+        host = host.split(":", 1)[0]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        raise ValueError("private proxy bypass must be a private IP address")
+    if not (ip.is_private or ip.is_loopback or ip.is_link_local):
+        raise ValueError("private proxy bypass host must be private, loopback, or link-local")
+    return str(ip)
 
 
 def run_gateway(args: argparse.Namespace) -> int:
@@ -992,6 +1458,348 @@ def run_daemon(args: argparse.Namespace) -> int:
 def guard_command(args: argparse.Namespace) -> int:
     runner = GuardedCommandRunner(args.config)
     return runner.run(args.tool, list(args.tool_args))
+
+
+def handle_secret_aliases(args: argparse.Namespace) -> int:
+    if args.secrets_command == "add":
+        return add_secret_alias(args)
+    if args.secrets_command == "list":
+        return list_secret_aliases(args)
+    if args.secrets_command == "use":
+        return use_secret_aliases(args)
+    if args.secrets_command == "import":
+        return import_secret_aliases(args)
+    if args.secrets_command == "restore":
+        return restore_dotenv_from_backup(args)
+    sys.stderr.write("agentsecure: missing secrets subcommand\n")
+    return 2
+
+
+def add_secret_alias(args: argparse.Namespace) -> int:
+    try:
+        real_secret = _read_real_secret(args)
+        alias = _secret_alias_service(args.config).add_alias(
+            alias_id=args.alias_id,
+            real_secret=real_secret,
+            env_name=args.env_name,
+            provider=args.provider,
+            inject_as=args.inject_as,
+            name=args.name,
+            approved_hosts=args.approved_host,
+        )
+    except (KeyManagementError, SecretAliasError) as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+    print(
+        json.dumps(
+            {
+                "alias_id": alias.alias_id,
+                "name": alias.name,
+                "env_name": alias.env_name,
+                "provider": alias.provider,
+                "inject_as": alias.inject_as,
+                "approved_hosts": alias.approved_hosts,
+                "has_local_secret": True,
+                "local_only": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def list_secret_aliases(args: argparse.Namespace) -> int:
+    aliases = _secret_alias_service(args.config).list_aliases()
+    print(
+        json.dumps(
+            [
+                {
+                    "alias_id": alias.alias_id,
+                    "name": alias.name,
+                    "env_name": alias.env_name,
+                    "provider": alias.provider,
+                    "inject_as": alias.inject_as,
+                    "approved_hosts": alias.approved_hosts,
+                    "has_local_secret": bool(alias.secret_ref),
+                    "local_only": True,
+                }
+                for alias in aliases
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def use_secret_aliases(args: argparse.Namespace) -> int:
+    try:
+        assigned = _secret_alias_service(args.config).assign_to_project(
+            args.config,
+            args.alias_ids,
+            project=args.project or os.path.basename(os.getcwd()) or "default",
+        )
+    except SecretAliasError as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+    print(
+        json.dumps(
+            {
+                "assigned": [
+                    {
+                        "alias_id": item.alias_id,
+                        "env_name": item.env_name,
+                        "provider": item.provider,
+                        "approved_hosts": item.approved_hosts,
+                    }
+                    for item in assigned
+                ],
+                "config_path": args.config,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def import_secret_aliases(args: argparse.Namespace) -> int:
+    dotenv_path = os.path.abspath(args.path)
+    if not os.path.exists(dotenv_path):
+        sys.stderr.write("agentsecure: dotenv file not found: %s\n" % args.path)
+        return 2
+    source_dir = os.path.dirname(dotenv_path) or "."
+    source_name = os.path.basename(dotenv_path)
+    discoveries = DotenvSecretScanner(source_dir, [source_name]).scan()
+    discoveries = [secret for secret in discoveries if secret.source == source_name]
+    if not discoveries:
+        print(
+            json.dumps(
+                {
+                    "imported": [],
+                    "dotenv": args.path,
+                    "message": "No secrets found",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    imports = []
+    for secret in discoveries:
+        alias_id = _alias_id_for_env_name(secret.name)
+        approved_hosts = _approved_hosts_for_import(secret, args.approved_host)
+        imports.append(
+            {
+                "alias_id": alias_id,
+                "env_name": secret.name,
+                "provider": secret.provider_hint,
+                "approved_hosts": approved_hosts,
+                "placeholder": _alias_placeholder(alias_id),
+            }
+        )
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dotenv": args.path,
+                    "imported": imports,
+                    "would_rewrite_dotenv": not args.keep_file,
+                    "dry_run": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    service = _secret_alias_service(args.config)
+    try:
+        for secret, item in zip(discoveries, imports):
+            service.add_alias(
+                alias_id=item["alias_id"],
+                real_secret=secret.value,
+                env_name=secret.name,
+                provider=secret.provider_hint,
+                approved_hosts=item["approved_hosts"],
+                name=secret.name,
+            )
+        assigned = service.assign_to_project(
+            args.config,
+            [item["alias_id"] for item in imports],
+            project=args.project or os.path.basename(os.getcwd()) or "default",
+        )
+    except SecretAliasError as exc:
+        sys.stderr.write("agentsecure: %s\n" % exc)
+        return 2
+
+    backup_path = ""
+    if not args.keep_file:
+        if not args.no_backup:
+            try:
+                backup_path = backup_dotenv_to_vault(dotenv_path, args.config)
+            except OSError as exc:
+                sys.stderr.write("agentsecure: failed to back up dotenv file: %s\n" % exc)
+                return 1
+        try:
+            _rewrite_dotenv_with_alias_placeholders(dotenv_path, {item["env_name"]: item["placeholder"] for item in imports})
+        except OSError as exc:
+            sys.stderr.write("agentsecure: failed to rewrite dotenv file: %s\n" % exc)
+            return 1
+
+    print(
+        json.dumps(
+            {
+                "dotenv": args.path,
+                "backup": backup_path,
+                "rewritten": not args.keep_file,
+                "imported": [
+                    {
+                        "alias_id": item.alias_id,
+                        "env_name": item.env_name,
+                        "provider": item.provider,
+                        "approved_hosts": item.approved_hosts,
+                    }
+                    for item in assigned
+                ],
+                "real_secrets_stored": "local_vault",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
+    dotenv_path = os.path.abspath(args.path)
+    backup_path = os.path.abspath(args.backup) if args.backup else latest_dotenv_backup(dotenv_path, args.config)
+    if not backup_path:
+        sys.stderr.write("agentsecure: no backup found for %s\n" % args.path)
+        return 2
+    if not os.path.exists(backup_path):
+        sys.stderr.write("agentsecure: backup file not found: %s\n" % backup_path)
+        return 2
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "dotenv": args.path,
+                    "backup": backup_path,
+                    "would_restore": True,
+                    "dry_run": True,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    try:
+        restore_dotenv_backup(dotenv_path, backup_path)
+    except OSError as exc:
+        sys.stderr.write("agentsecure: failed to restore dotenv file: %s\n" % exc)
+        return 1
+    print(
+        json.dumps(
+            {
+                "dotenv": args.path,
+                "backup": backup_path,
+                "restored": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _alias_id_for_env_name(env_name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "_", str(env_name).strip().lower())
+    normalized = normalized.strip("._-")
+    return normalized or "secret"
+
+
+def _alias_placeholder(alias_id: str) -> str:
+    return "AGENTSECURE_ALIAS_%s" % re.sub(r"[^A-Z0-9]+", "_", alias_id.upper()).strip("_")
+
+
+def _approved_hosts_for_import(secret: DiscoveredSecret, extra_hosts: List[str]) -> List[str]:
+    hosts = []
+    inferred = _host_from_secret_value(secret.value)
+    if inferred:
+        hosts.append(inferred)
+    provider_hosts = {
+        "openai": "api.openai.com",
+        "anthropic": "api.anthropic.com",
+        "github": "api.github.com",
+        "stripe": "api.stripe.com",
+    }
+    provider_host = provider_hosts.get(secret.provider_hint)
+    if provider_host:
+        hosts.append(provider_host)
+    hosts.extend(extra_hosts or [])
+    result = []
+    seen = set()
+    for host in hosts:
+        normalized = str(host).strip().lower().rstrip(".")
+        if normalized and normalized not in seen:
+            result.append(normalized)
+            seen.add(normalized)
+    return result
+
+
+def _host_from_secret_value(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value).strip())
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").strip().lower().rstrip(".")
+
+
+def _rewrite_dotenv_with_alias_placeholders(dotenv_path: str, placeholders: Dict[str, str]) -> None:
+    with open(dotenv_path, "r") as handle:
+        lines = handle.readlines()
+    rewritten = []
+    for line in lines:
+        parsed_name = _dotenv_line_name(line)
+        if parsed_name and parsed_name in placeholders:
+            prefix = line.split("=", 1)[0].rstrip()
+            newline = "\n" if line.endswith("\n") else ""
+            rewritten.append("%s=%s%s" % (prefix, placeholders[parsed_name], newline))
+        else:
+            rewritten.append(line)
+    fd, temp_path = tempfile.mkstemp(prefix=".agentsecure-dotenv-", dir=os.path.dirname(dotenv_path) or ".")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.writelines(rewritten)
+        shutil.copymode(dotenv_path, temp_path)
+        os.replace(temp_path, dotenv_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _dotenv_line_name(line: str) -> str:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        return ""
+    name = stripped.split("=", 1)[0].strip()
+    if name.startswith("export "):
+        name = name[len("export ") :].strip()
+    return name
+
+
+def _secret_alias_service(config_path: str) -> SecretAliasService:
+    home = agentsecure_home()
+    return SecretAliasService(
+        local_secret_alias_store_for_home(home),
+        encrypted_secret_store_for_vault(),
+        local_grant_store_for_config(config_path),
+        JsonLineAuditLogger(".agentsecure/audit.log"),
+    )
 
 
 def run_api(args: argparse.Namespace) -> int:

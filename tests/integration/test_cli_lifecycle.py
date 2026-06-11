@@ -181,6 +181,77 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY=virt_openai_", env_result.stdout)
             self.assertNotIn(real_secret, env_result.stdout)
 
+    def test_run_exposes_agent_guidance_file_for_alias_bindings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            home_dir = os.path.join(temp_dir, "home")
+            real_secret = "guidance-real-secret-for-test"
+            shared_env = {
+                "AGENTSECURE_HOME": home_dir,
+                "TEST_OPENAI_KEY": real_secret,
+            }
+
+            add_result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "secrets",
+                    "add",
+                    "openai_dev",
+                    "--env-name",
+                    "OPENAI_API_KEY",
+                    "--provider",
+                    "openai",
+                    "--approved-host",
+                    "api.openai.com",
+                    "--real-secret-env",
+                    "TEST_OPENAI_KEY",
+                ],
+                cwd=temp_dir,
+                env=shared_env,
+            )
+            self.assertEqual(0, add_result.returncode, add_result.stderr)
+
+            use_result = run_agentsecure(
+                ["--config", config_path, "secrets", "use", "openai_dev"],
+                cwd=temp_dir,
+                env=shared_env,
+            )
+            self.assertEqual(0, use_result.returncode, use_result.stderr)
+
+            script = (
+                "import os; "
+                "path=os.environ['AGENTSECURE_AGENT_GUIDE']; "
+                "print(os.environ['AGENTSECURE_SKILL_FILE'] == path); "
+                "print(path); "
+                "print(open(path).read())"
+            )
+            run_result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "run",
+                    "--no-discover",
+                    "--",
+                    "python3",
+                    "-c",
+                    script,
+                ],
+                cwd=temp_dir,
+                env=shared_env,
+            )
+
+            if run_result.returncode != 0 and "gateway failed to start" in run_result.stderr:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, run_result.returncode, run_result.stderr)
+            self.assertIn("AgentSecure agent guide: .agentsecure/runs/", run_result.stdout)
+            self.assertIn("True", run_result.stdout)
+            self.assertIn("OPENAI_API_KEY", run_result.stdout)
+            self.assertIn("provider=openai", run_result.stdout)
+            self.assertIn("approved_hosts=api.openai.com", run_result.stdout)
+            self.assertIn("Do not read `.env` files", run_result.stdout)
+            self.assertNotIn(real_secret, run_result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

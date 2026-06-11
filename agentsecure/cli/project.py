@@ -5,6 +5,7 @@ import shutil
 
 from agentsecure.cli.common import scanner
 from agentsecure.core.agentsecure_md import AGENTSECURE_MD
+from agentsecure.core.dotenv_backups import latest_dotenv_backup, restore_dotenv_backup
 from agentsecure.core.product import ProductService
 from agentsecure.workspace.materializer import make_tree_writable
 
@@ -104,7 +105,7 @@ def cleanup_project(args: argparse.Namespace) -> int:
 
 
 def uninstall_agentsecure(args: argparse.Namespace) -> int:
-    cleanup_args = argparse.Namespace(config="agentsecure.json", yes=args.yes, json=False)
+    cleanup_args = argparse.Namespace(config=args.config, yes=args.yes, json=False)
     if not args.yes:
         print("AgentSecure will clean this project and remove the user-level CLI.")
         answer = input("Continue? [y/N]: ").strip().lower()
@@ -112,6 +113,9 @@ def uninstall_agentsecure(args: argparse.Namespace) -> int:
             print("Uninstall cancelled.")
             return 1
         cleanup_args.yes = True
+    restore_code = _restore_dotenv_during_uninstall(args)
+    if restore_code != 0:
+        return restore_code
     cleanup_project(cleanup_args)
     install_dir = os.path.expanduser(args.install_dir)
     targets = [
@@ -131,6 +135,38 @@ def uninstall_agentsecure(args: argparse.Namespace) -> int:
         print("No AgentSecure CLI files found in %s." % install_dir)
     print("Optional PATH cleanup: remove this entry from your shell profile if present:")
     print('  export PATH="%s:$PATH"' % install_dir)
+    return 0
+
+
+def _restore_dotenv_during_uninstall(args: argparse.Namespace) -> int:
+    if getattr(args, "no_restore_dotenv", False):
+        print("Dotenv: restore skipped.")
+        return 0
+
+    dotenv_path = os.path.abspath(getattr(args, "dotenv", ".env"))
+    backup_path = latest_dotenv_backup(dotenv_path, args.config)
+    if not backup_path:
+        if getattr(args, "restore_dotenv", False):
+            print("Dotenv: no AgentSecure backup found for %s." % getattr(args, "dotenv", ".env"))
+        return 0
+
+    should_restore = bool(getattr(args, "restore_dotenv", False))
+    if not should_restore and not args.yes:
+        print("AgentSecure can restore %s from this private backup:" % getattr(args, "dotenv", ".env"))
+        print("  %s" % backup_path)
+        answer = input("Restore dotenv before uninstall? [y/N]: ").strip().lower()
+        should_restore = answer in ("y", "yes")
+
+    if not should_restore:
+        print("Dotenv: restore skipped.")
+        return 0
+
+    try:
+        restore_dotenv_backup(dotenv_path, backup_path)
+    except OSError as exc:
+        print("Dotenv: failed to restore %s: %s" % (getattr(args, "dotenv", ".env"), exc))
+        return 1
+    print("Dotenv: restored %s from %s" % (getattr(args, "dotenv", ".env"), backup_path))
     return 0
 
 

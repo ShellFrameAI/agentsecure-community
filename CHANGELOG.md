@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-05-31
+
+- Added central local secret aliases with `agentsecure secrets add/list/use`.
+- Added run-scoped virtual tokens for assigned aliases; real alias values stay under `~/.agentsecure/vault/`.
+- Added per-alias approved-host checks before gateway credential injection.
+- Updated community docs to make `.env` fake-only and point real secrets to the local vault.
+
 ## 0.1.6 - 2026-05-27
 
 - Clarified that virtual environments are optional in the install instructions.

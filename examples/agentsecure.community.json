@@ -8,6 +8,16 @@
       "provider": "openai"
     }
   ],
+  "secret_aliases": [
+    {
+      "alias_id": "openai_dev",
+      "env_name": "OPENAI_API_KEY",
+      "provider": "openai",
+      "approved_hosts": ["api.openai.com"],
+      "required": true,
+      "mode": "virtualize"
+    }
+  ],
   "env_policy": {
     "OPENAI_API_KEY": {
       "mode": "virtualize",
