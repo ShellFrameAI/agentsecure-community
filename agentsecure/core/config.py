@@ -18,6 +18,7 @@ from agentsecure.core.models import (
     NetworkPolicy,
     ProviderProxyConfig,
     ProviderProxyProvider,
+    ProjectSecretAlias,
     ProcessPolicy,
     SecretBinding,
 )
@@ -42,6 +43,7 @@ class JsonConfigLoader:
 
     def _parse(self, data: Dict[str, Any]) -> AgentSecureConfig:
         secrets = self._parse_secrets(data.get("secrets", []))
+        secret_aliases = self._parse_secret_aliases(data.get("secret_aliases", []))
         capabilities = self._parse_capabilities(data.get("capabilities", {}))
         env_policy = self._parse_env_policy(data.get("env_policy", {}), capabilities)
         network_data = data.get("network", {})
@@ -54,6 +56,7 @@ class JsonConfigLoader:
 
         return AgentSecureConfig(
             secrets=secrets,
+            secret_aliases=secret_aliases,
             env_policy=env_policy,
             network=NetworkPolicy(
                 allow_domains=list(network_data.get("allow_domains", [])),
@@ -86,9 +89,38 @@ class JsonConfigLoader:
                     real_secret_ref=str(item.get("real_secret_ref", "")),
                     inject_as=str(item.get("inject_as", "authorization_bearer")),
                     provider=str(item.get("provider", "custom")),
+                    expires_at=(float(item["expires_at"]) if "expires_at" in item else None),
+                    alias_id=str(item.get("alias_id", "")),
+                    approved_hosts=list(item.get("approved_hosts", [])),
                 )
             )
         return bindings
+
+    def _parse_secret_aliases(self, values: List[Dict[str, Any]]) -> List[ProjectSecretAlias]:
+        if not isinstance(values, list):
+            raise ConfigError("secret_aliases must be a list")
+        aliases = []
+        for item in values:
+            if not isinstance(item, dict):
+                raise ConfigError("secret_aliases entries must be JSON objects")
+            alias_id = str(item.get("alias_id", item.get("alias", ""))).strip()
+            if not alias_id:
+                raise ConfigError("secret_aliases.alias_id is required")
+            mode = str(item.get("mode", "virtualize"))
+            if mode not in ("deny", "virtualize"):
+                raise ConfigError("secret_aliases.%s.mode must be deny or virtualize" % alias_id)
+            aliases.append(
+                ProjectSecretAlias(
+                    alias_id=alias_id,
+                    env_name=str(item.get("env_name", "")),
+                    provider=str(item.get("provider", "")),
+                    inject_as=str(item.get("inject_as", "authorization_bearer")),
+                    approved_hosts=list(item.get("approved_hosts", [])),
+                    required=bool(item.get("required", True)),
+                    mode=mode,
+                )
+            )
+        return aliases
 
     def _parse_env_policy(self, value: Dict[str, Any], capabilities: Dict[str, Capability]) -> EnvPolicy:
         if not isinstance(value, dict):

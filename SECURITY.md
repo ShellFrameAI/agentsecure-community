@@ -5,7 +5,8 @@
 This community release supports local-only AgentSecure behavior:
 
 - CLI demo and local project initialization.
-- Local `.env` discovery and masking.
+- Local `.env` discovery and masking for fake/demo project values.
+- Central local secret aliases stored under `~/.agentsecure/vault/`.
 - Local virtual secret storage under `.agentsecure/`.
 - Basic policy config and local command guard.
 - Local tests and examples.
@@ -25,8 +26,8 @@ Report privately by emailing the project maintainer or opening a private securit
 
 ## Secret Handling Rules
 
-- Never commit real `.env` files, private keys, access tokens, database URLs, or generated `.agentsecure/` state.
-- Use `examples/.env.example` for fake demo values only.
+- Never commit real `.env` files, private keys, access tokens, database URLs, generated `.agentsecure/` state, or `~/.agentsecure/vault/` contents.
+- Use `agentsecure secrets add` to store real secrets locally, `agentsecure secrets use` to assign aliases to a project, and `examples/.env.example` for fake demo values only.
 - Run `python3 scripts/secret_scan.py .` before publishing.
 - Rotate any credential immediately if it was committed, even if later removed from Git history.
 

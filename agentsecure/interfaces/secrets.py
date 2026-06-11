@@ -6,7 +6,7 @@ class TokenResolver(ABC):
     """Maps virtual tokens to real secret material."""
 
     @abstractmethod
-    def resolve(self, virtual_token: str) -> Optional[str]:
+    def resolve(self, virtual_token: str, context: Optional[Dict] = None) -> Optional[str]:
         pass
 
 
@@ -16,4 +16,3 @@ class VirtualEnvironmentProvider(ABC):
     @abstractmethod
     def build_environment(self) -> Dict[str, str]:
         pass
-

@@ -22,6 +22,8 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
     provider_proxy = ProviderProxyConfig()
     gateway_host = "127.0.0.1"
     gateway_port = 8765
+    project_id = ""
+    run_id = ""
 
     def do_CONNECT(self) -> None:
         host, port = self._split_host_port(self.path, default_port=443)
@@ -108,7 +110,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             self.send_error(501, "direct HTTPS proxying is handled with CONNECT tunneling")
             return
 
-        self._inject_credentials(headers)
+        self._inject_credentials(headers, host)
         path = parsed.path or "/"
         if parsed.query:
             path += "?" + parsed.query
@@ -205,20 +207,33 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         username = decoded.split(":", 1)[0]
         return username if username.startswith("session_") else ""
 
-    def _inject_credentials(self, headers: Dict[str, str]) -> None:
+    def _inject_credentials(self, headers: Dict[str, str], host: str = "") -> None:
         auth_header = headers.get("Authorization")
         if auth_header:
             parts = auth_header.split(" ", 1)
             if len(parts) == 2:
                 scheme, token = parts
-                real_secret = self.token_resolver.resolve(token)
+                real_secret = self._resolve_virtual_token(token, host)
                 if real_secret:
                     headers["Authorization"] = scheme + " " + real_secret
 
         for name, value in list(headers.items()):
-            real_secret = self.token_resolver.resolve(value)
+            real_secret = self._resolve_virtual_token(value, host)
             if real_secret:
                 headers[name] = real_secret
+
+    def _resolve_virtual_token(self, virtual_token: str, host: str = "") -> str:
+        try:
+            return self.token_resolver.resolve(virtual_token, self._resolution_context(host)) or ""
+        except TypeError:
+            return self.token_resolver.resolve(virtual_token) or ""
+
+    def _resolution_context(self, host: str = "") -> Dict[str, str]:
+        return {
+            "host": host,
+            "project_id": self.project_id,
+            "run_id": self._session_id() or self.run_id,
+        }
 
     def _provider_forward_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
         credential_header_names = {
@@ -417,7 +432,7 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
     def _real_secret_for_provider(self, provider: ProviderProxyProvider) -> str:
         for binding in self.secret_bindings.values():
             if binding.env_name == provider.env_name and binding.provider == provider.name:
-                return self.token_resolver.resolve(binding.virtual_token) or ""
+                return self._resolve_virtual_token(binding.virtual_token, "")
         return ""
 
     def _send_policy_denied(self, reason: str, host: str = "") -> None:
@@ -549,6 +564,8 @@ class LocalGateway:
         audit_logger: AuditLogger,
         secret_bindings: Dict[str, SecretBinding],
         provider_proxy: ProviderProxyConfig = None,
+        project_id: str = "",
+        run_id: str = "",
     ) -> None:
         self._host = host
         self._port = port
@@ -557,6 +574,8 @@ class LocalGateway:
         self._audit = audit_logger
         self._secret_bindings = secret_bindings
         self._provider_proxy = provider_proxy or ProviderProxyConfig()
+        self._project_id = project_id
+        self._run_id = run_id
         self._server = None
 
     def serve_forever(self, ready_callback: Optional[Callable[[], None]] = None) -> None:
@@ -583,6 +602,8 @@ class LocalGateway:
         BoundGatewayRequestHandler.provider_proxy = self._provider_proxy
         BoundGatewayRequestHandler.gateway_host = self._host
         BoundGatewayRequestHandler.gateway_port = self._port
+        BoundGatewayRequestHandler.project_id = self._project_id
+        BoundGatewayRequestHandler.run_id = self._run_id
         return BoundGatewayRequestHandler
 
 

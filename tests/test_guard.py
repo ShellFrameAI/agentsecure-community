@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from agentsecure.core.key_service import KeyManagementService
+from agentsecure.guard.network import GuardedNetworkCommandPolicy
 from agentsecure.guard.sanitizer import SecretOutputSanitizer
 from agentsecure.implementations.audit import JsonLineAuditLogger
 from agentsecure.implementations.grant_store import LocalJsonGrantStore
@@ -11,6 +12,21 @@ from agentsecure.implementations.secret_store_factory import encrypted_secret_st
 
 
 class SecretOutputSanitizerTest(unittest.TestCase):
+    def test_network_policy_marks_credentialed_curl_for_proxy(self):
+        policy = GuardedNetworkCommandPolicy("agentsecure.json")
+
+        self.assertTrue(
+            policy.should_proxy(
+                "curl",
+                [
+                    "-H",
+                    "Authorization: Bearer virt_custom_test",
+                    "http://approved.example.com/whoami",
+                ],
+            )
+        )
+        self.assertFalse(policy.should_proxy("curl", ["http://approved.example.com/health"]))
+
     def test_replaces_real_secret_with_virtual_token(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = os.path.join(temp_dir, "agentsecure.json")
