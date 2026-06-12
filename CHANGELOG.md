@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.18 - 2026-06-12
+
+- Added `secret_runtime.mode` policy configuration with `strict`, `virtual`, and `compat` modes.
+- Added `agentsecure run --secret-mode` override plus status, doctor, output, and audit visibility for the selected mode.
+- Kept compat mode as trusted legacy labeling while Community still keeps vault secrets virtual or brokered.
+
 ## 0.1.7 - 2026-05-31
 
 - Added central local secret aliases with `agentsecure secrets add/list/use`.
