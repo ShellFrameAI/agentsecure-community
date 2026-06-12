@@ -236,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Route general HTTP(S) traffic through the AgentSecure gateway. Command-guard leaves general traffic direct by default.",
     )
     run_parser.add_argument(
+        "--secret-mode",
+        choices=["strict", "virtual", "compat"],
+        help="Secret runtime mode for this run. Defaults to secret_runtime.mode from config, or virtual for older configs.",
+    )
+    run_parser.add_argument(
         "--workspace-mode",
         choices=["symlink", "copy"],
         default="symlink",
@@ -412,6 +417,22 @@ def run_agent(args: argparse.Namespace) -> int:
             return 2
     runtime_bindings = alias_runtime_bindings
     container = Container.from_config_path(args.config, runtime_bindings=runtime_bindings, run_id=run_id)
+    secret_mode = _selected_secret_runtime_mode(args, container)
+    print("AgentSecure secret runtime: %s" % secret_mode, flush=True)
+    if secret_mode == "compat":
+        print(
+            "AgentSecure warning: compat secret runtime marks this as trusted legacy code; Community still keeps vault secrets virtual or brokered.",
+            flush=True,
+        )
+    container.audit_logger.record(
+        "secret_mode_selected",
+        {
+            "mode": secret_mode,
+            "run_id": run_id,
+            "project_id": project_id,
+            "aliases": [binding.alias_id or binding.env_name for binding in runtime_bindings],
+        },
+    )
     replacements.extend(_configured_secret_replacements(container, replacements))
     source_root = os.getcwd()
     run_cwd = source_root
@@ -902,6 +923,10 @@ def _run_codex_mcp_add(config_path: str) -> Dict[str, Any]:
         "stderr": process.stderr.strip(),
         "error": process.stderr.strip() if process.returncode else "",
     }
+
+
+def _selected_secret_runtime_mode(args: argparse.Namespace, container: Container) -> str:
+    return str(getattr(args, "secret_mode", "") or container.config.secret_runtime.mode or "virtual")
 
 
 def _workspace_base_for_runtime(source_root: str, runtime: str) -> str:

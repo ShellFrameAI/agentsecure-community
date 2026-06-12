@@ -16,6 +16,7 @@ from agentsecure.cli.main import (
     build_parser,
     _merge_no_proxy,
     _proxy_url,
+    _selected_secret_runtime_mode,
     _should_preserve_interactive_tty,
 )
 from agentsecure.core.models import AgentSecureConfig, SecretBinding
@@ -134,6 +135,22 @@ class CliTest(unittest.TestCase):
             self.assertNotIn(private_command, help_text)
         self.assertNotIn("AgentSecure Cloud", help_text)
 
+    def test_secret_mode_uses_config_mode_by_default(self):
+        config = AgentSecureConfig()
+        config.secret_runtime.mode = "strict"
+        container = type("Container", (), {"config": config})()
+        args = type("Args", (), {"secret_mode": None})()
+
+        self.assertEqual("strict", _selected_secret_runtime_mode(args, container))
+
+    def test_secret_mode_cli_override_wins(self):
+        config = AgentSecureConfig()
+        config.secret_runtime.mode = "strict"
+        container = type("Container", (), {"config": config})()
+        args = type("Args", (), {"secret_mode": "compat"})()
+
+        self.assertEqual("compat", _selected_secret_runtime_mode(args, container))
+
     def test_run_help_does_not_advertise_cloud_reporting_flags(self):
         parser = build_parser()
         output = StringIO()
@@ -147,6 +164,7 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("--cloud-debug", help_text)
         self.assertNotIn("--project", help_text)
         self.assertNotIn("--task", help_text)
+        self.assertIn("--secret-mode", help_text)
 
     def test_available_gateway_port_skips_busy_preferred_port(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

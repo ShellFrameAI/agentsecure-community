@@ -26,6 +26,7 @@ class ProductServiceTest(unittest.TestCase):
                     "https://api.openai.com",
                     config["provider_catalog"]["openai"]["upstream"],
                 )
+                self.assertEqual("strict", config["secret_runtime"]["mode"])
             finally:
                 os.chdir(cwd)
 
@@ -83,6 +84,7 @@ class ProductServiceTest(unittest.TestCase):
                 result = service.status()
 
                 profile = result["configuration_profile"]
+                self.assertEqual("virtual", result["secret_runtime"]["mode"])
                 self.assertEqual(profile, result["config_profile"])
                 self.assertEqual("profile-1", profile["id"])
                 self.assertEqual("pending", profile["status"])

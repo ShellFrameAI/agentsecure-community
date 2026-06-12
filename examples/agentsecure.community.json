@@ -50,6 +50,9 @@
     "host": "127.0.0.1",
     "port": 8765
   },
+  "secret_runtime": {
+    "mode": "strict"
+  },
   "audit": {
     "path": ".agentsecure/audit.log"
   }
