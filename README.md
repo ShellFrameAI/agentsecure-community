@@ -189,6 +189,18 @@ For non-secret requests, the agent should use normal `curl`, SDKs, tests, or app
 agentsecure run -- claude
 ```
 
+New projects include a simple secret runtime policy:
+
+```json
+{
+  "secret_runtime": {
+    "mode": "strict"
+  }
+}
+```
+
+`strict` means user software should receive virtual values, local broker URLs, and provider proxy base URLs, not raw vault secrets. Older configs without this block keep the existing `virtual` behavior. `compat` marks a run as trusted legacy code for warnings and audit while Community still keeps vault secrets virtual or brokered.
+
 Every `agentsecure run` creates a small per-run guide under `.agentsecure/runs/` and prints its relative path:
 
 ```text

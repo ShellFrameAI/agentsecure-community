@@ -104,6 +104,7 @@ class ProductService:
             },
             "workspaces": workspaces,
             "gateway": config.get("gateway", {}) if config else {},
+            "secret_runtime": self._secret_runtime_status(config),
             "api": {
                 "host": "127.0.0.1",
                 "port": 8787,
@@ -147,6 +148,14 @@ class ProductService:
         config = self._load_config()
         checks.append(self._check("config_valid_json", config is not None, self.config_path))
         if config:
+            secret_runtime = self._secret_runtime_status(config)
+            checks.append(
+                self._check(
+                    "secret_runtime_mode",
+                    secret_runtime["mode"] in ("strict", "virtual", "compat"),
+                    secret_runtime["detail"],
+                )
+            )
             gateway = config.get("gateway", {})
             checks.append(
                 self._check(
@@ -211,6 +220,20 @@ class ProductService:
         elif assigned_version and not metadata.get("status"):
             metadata["status"] = "assigned"
         return metadata
+
+    def _secret_runtime_status(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(config, dict):
+            return {"mode": "virtual", "configured": False, "detail": "config missing; using virtual runtime mode"}
+        value = config.get("secret_runtime", {})
+        if not isinstance(value, dict):
+            return {"mode": "virtual", "configured": False, "detail": "secret_runtime is invalid; expected object"}
+        mode = str(value.get("mode", "virtual") or "virtual")
+        configured = "secret_runtime" in config
+        if configured:
+            detail = "secret runtime mode is %s" % mode
+        else:
+            detail = "secret_runtime.mode is not configured; using virtual mode, recommend strict for new projects"
+        return {"mode": mode, "configured": configured, "detail": detail}
 
     def _cloud_state(self) -> Dict[str, Any]:
         path = os.path.join(".agentsecure", "cloud.json")

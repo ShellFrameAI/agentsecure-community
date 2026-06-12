@@ -26,6 +26,7 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             self.assertEqual(0, status_result.returncode, status_result.stderr)
             self.assertIn("AGENTSECURE.md: AGENTSECURE.md (valid)", status_result.stdout)
             self.assertIn("Configured secrets: 0", status_result.stdout)
+            self.assertIn("Secret runtime: strict", status_result.stdout)
 
             validate_result = run_agentsecure(["policy", "validate"], cwd=temp_dir)
             self.assertEqual(0, validate_result.returncode, validate_result.stderr)
@@ -35,6 +36,7 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             self.assertEqual(0, doctor_result.returncode, doctor_result.stderr)
             self.assertIn("[OK] config_exists", doctor_result.stdout)
             self.assertIn("[OK] agentsecure_md_valid", doctor_result.stdout)
+            self.assertIn("[OK] secret_runtime_mode", doctor_result.stdout)
 
             with open(os.path.join(temp_dir, "AGENTSECURE.md"), "a", encoding="utf-8") as handle:
                 handle.write("\nDATABASE_URL_DEV:\n  mode: allow\n")
@@ -251,6 +253,98 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             self.assertIn("approved_hosts=api.openai.com", run_result.stdout)
             self.assertIn("Do not read `.env` files", run_result.stdout)
             self.assertNotIn(real_secret, run_result.stdout)
+
+    def test_run_env_dump_does_not_expose_vault_alias_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            home_dir = os.path.join(temp_dir, "home")
+            real_secret = "env-dump-real-secret-for-test"
+            setup_env = {
+                "AGENTSECURE_HOME": home_dir,
+                "TEST_OPENAI_KEY": real_secret,
+            }
+
+            add_result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "secrets",
+                    "add",
+                    "openai_dev",
+                    "--env-name",
+                    "OPENAI_API_KEY",
+                    "--provider",
+                    "openai",
+                    "--approved-host",
+                    "api.openai.com",
+                    "--real-secret-env",
+                    "TEST_OPENAI_KEY",
+                ],
+                cwd=temp_dir,
+                env=setup_env,
+            )
+            self.assertEqual(0, add_result.returncode, add_result.stderr)
+
+            use_result = run_agentsecure(
+                ["--config", config_path, "secrets", "use", "openai_dev"],
+                cwd=temp_dir,
+                env=setup_env,
+            )
+            self.assertEqual(0, use_result.returncode, use_result.stderr)
+
+            run_result = run_agentsecure(
+                [
+                    "--config",
+                    config_path,
+                    "run",
+                    "--secret-mode",
+                    "strict",
+                    "--no-discover",
+                    "--",
+                    "python3",
+                    "-c",
+                    "import json, os; print(json.dumps(dict(os.environ), sort_keys=True))",
+                ],
+                cwd=temp_dir,
+                env={"AGENTSECURE_HOME": home_dir},
+            )
+
+            if run_result.returncode != 0 and "gateway failed to start" in run_result.stderr:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, run_result.returncode, run_result.stderr)
+            self.assertIn("AgentSecure secret runtime: strict", run_result.stdout)
+            self.assertIn('"OPENAI_API_KEY": "virt_openai_', run_result.stdout)
+            self.assertNotIn(real_secret, run_result.stdout)
+
+    def test_compat_secret_mode_warns_and_audits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            init_result = run_agentsecure(["init"], cwd=temp_dir)
+            self.assertEqual(0, init_result.returncode, init_result.stderr)
+
+            run_result = run_agentsecure(
+                [
+                    "run",
+                    "--secret-mode",
+                    "compat",
+                    "--no-discover",
+                    "--",
+                    "python3",
+                    "-c",
+                    "print('compat-ok')",
+                ],
+                cwd=temp_dir,
+            )
+
+            if run_result.returncode != 0 and "gateway failed to start" in run_result.stderr:
+                self.skipTest("local gateway bind is not permitted in this environment")
+            self.assertEqual(0, run_result.returncode, run_result.stderr)
+            self.assertIn("AgentSecure secret runtime: compat", run_result.stdout)
+            self.assertIn("trusted legacy code", run_result.stdout)
+            self.assertIn("compat-ok", run_result.stdout)
+            with open(os.path.join(temp_dir, ".agentsecure", "audit.log"), "r") as handle:
+                audit = handle.read()
+            self.assertIn("secret_mode_selected", audit)
+            self.assertIn('"mode": "compat"', audit)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,8 @@ def show_status(args: argparse.Namespace) -> int:
     print("Safe workspaces: %s" % result["workspaces"])
     if result.get("configuration_profile"):
         print("Config profile: %s" % _profile_label(result["configuration_profile"]))
+    secret_runtime = result.get("secret_runtime", {})
+    print("Secret runtime: %s" % secret_runtime.get("mode", "virtual"))
     print("Gateway: %s:%s" % (result["gateway"].get("host", ""), result["gateway"].get("port", "")))
     print("API: %s:%s" % (result["api"]["host"], result["api"]["port"]))
     return 0

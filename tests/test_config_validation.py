@@ -4,6 +4,20 @@ from agentsecure.core.config import ConfigError, JsonConfigLoader
 
 
 class ConfigValidationTest(unittest.TestCase):
+    def test_secret_runtime_defaults_to_virtual_for_old_configs(self):
+        config = JsonConfigLoader().load_data({})
+
+        self.assertEqual("virtual", config.secret_runtime.mode)
+
+    def test_secret_runtime_accepts_strict_virtual_and_compat(self):
+        for mode in ("strict", "virtual", "compat"):
+            config = JsonConfigLoader().load_data({"secret_runtime": {"mode": mode}})
+            self.assertEqual(mode, config.secret_runtime.mode)
+
+    def test_secret_runtime_rejects_unknown_mode(self):
+        with self.assertRaises(ConfigError):
+            JsonConfigLoader().load_data({"secret_runtime": {"mode": "raw"}})
+
     def test_gateway_must_be_loopback(self):
         with self.assertRaises(ConfigError):
             JsonConfigLoader().load_data({"gateway": {"host": "0.0.0.0", "port": 8765}})

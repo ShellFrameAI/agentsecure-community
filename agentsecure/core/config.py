@@ -20,6 +20,7 @@ from agentsecure.core.models import (
     ProviderProxyProvider,
     ProjectSecretAlias,
     ProcessPolicy,
+    SecretRuntimeConfig,
     SecretBinding,
 )
 
@@ -52,6 +53,7 @@ class JsonConfigLoader:
         audit_data = data.get("audit", {})
         gateway_data = data.get("gateway", {})
         gateway = self._parse_gateway(gateway_data)
+        secret_runtime = self._parse_secret_runtime(data.get("secret_runtime", {}))
         provider_proxy = self._parse_provider_proxy(data.get("provider_proxy", {}))
 
         return AgentSecureConfig(
@@ -73,6 +75,7 @@ class JsonConfigLoader:
             ),
             audit=AuditConfig(path=str(audit_data.get("path", ".agentsecure/audit.log"))),
             gateway=gateway,
+            secret_runtime=secret_runtime,
             provider_proxy=provider_proxy,
             capabilities=capabilities,
             raw=data,
@@ -223,6 +226,16 @@ class JsonConfigLoader:
         if not is_valid_port(port):
             raise ConfigError("gateway.port must be between 1 and 65535")
         return GatewayConfig(host=host, port=port)
+
+    def _parse_secret_runtime(self, value: Dict[str, Any]) -> SecretRuntimeConfig:
+        if not value:
+            return SecretRuntimeConfig()
+        if not isinstance(value, dict):
+            raise ConfigError("secret_runtime must be a JSON object")
+        mode = str(value.get("mode", "virtual")).strip() or "virtual"
+        if mode not in ("strict", "virtual", "compat"):
+            raise ConfigError("secret_runtime.mode must be strict, virtual, or compat")
+        return SecretRuntimeConfig(mode=mode)
 
     def _validate_env_name(self, path: str, value: str) -> None:
         if not value:

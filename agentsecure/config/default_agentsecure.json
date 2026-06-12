@@ -28,6 +28,9 @@
     "host": "127.0.0.1",
     "port": 8765
   },
+  "secret_runtime": {
+    "mode": "strict"
+  },
   "provider_catalog": {
     "openai": {
       "env_name": "OPENAI_API_KEY",

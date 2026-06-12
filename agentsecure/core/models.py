@@ -172,6 +172,11 @@ class GatewayConfig:
     port: int = 8765
 
 
+@dataclass
+class SecretRuntimeConfig:
+    mode: str = "virtual"
+
+
 @dataclass(frozen=True)
 class ProviderProxyProvider:
     name: str
@@ -226,6 +231,7 @@ class AgentSecureConfig:
     files: FilePolicy = field(default_factory=FilePolicy)
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    secret_runtime: SecretRuntimeConfig = field(default_factory=SecretRuntimeConfig)
     provider_proxy: ProviderProxyConfig = field(default_factory=ProviderProxyConfig)
     capabilities: Dict[str, Capability] = field(default_factory=dict)
     raw: Dict[str, Any] = field(default_factory=dict)
