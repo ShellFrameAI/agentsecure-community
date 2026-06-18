@@ -1,4 +1,5 @@
 import os
+import stat
 from typing import Iterable, List, Optional, Set
 
 from agentsecure.scanner.models import Finding, ScanReport
@@ -37,11 +38,16 @@ class RepositoryScanner:
 
     def scan(self, path: str = ".") -> ScanReport:
         root = os.path.abspath(path)
+        real_root = os.path.realpath(root)
         display_path = path or "."
         report = ScanReport(path=display_path)
         seen_path_findings: Set[str] = set()
         for current_root, dirnames, filenames in os.walk(root):
-            dirnames[:] = [dirname for dirname in dirnames if dirname not in IGNORE_DIRS]
+            dirnames[:] = [
+                dirname
+                for dirname in dirnames
+                if dirname not in IGNORE_DIRS and not os.path.islink(os.path.join(current_root, dirname))
+            ]
             for dirname in list(dirnames):
                 abs_path = os.path.join(current_root, dirname)
                 rel_path = normalized_rel(os.path.relpath(abs_path, root))
@@ -57,7 +63,7 @@ class RepositoryScanner:
                 path_context = PathContext(root=root, rel_path=rel_path, abs_path=abs_path, is_dir=False)
                 for finding in self._check_path(path_context):
                     report.findings.append(finding)
-                text = self._read_text(abs_path)
+                text = self._read_text(abs_path, real_root)
                 if text is None:
                     report.skipped_files += 1
                     continue
@@ -80,13 +86,20 @@ class RepositoryScanner:
             findings.extend(rule.check_file(context))
         return findings
 
-    def _read_text(self, path: str) -> Optional[str]:
+    def _read_text(self, path: str, real_root: str) -> Optional[str]:
         try:
-            if os.path.getsize(path) > MAX_FILE_BYTES:
+            file_stat = os.lstat(path)
+            if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+                return None
+            if file_stat.st_size > MAX_FILE_BYTES:
+                return None
+            if not _is_within_root(os.path.realpath(path), real_root):
                 return None
             with open(path, "rb") as handle:
-                data = handle.read()
+                data = handle.read(MAX_FILE_BYTES + 1)
         except OSError:
+            return None
+        if len(data) > MAX_FILE_BYTES:
             return None
         if b"\x00" in data:
             return None
@@ -113,3 +126,10 @@ def default_rules() -> List[Rule]:
 def _finding_sort_key(finding: Finding):
     severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Info": 4}
     return (severity_order.get(finding.severity, 99), finding.path, finding.line or 0, finding.title)
+
+
+def _is_within_root(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False

@@ -108,7 +108,11 @@ class RepositoryScannerTest(unittest.TestCase):
 
     def test_network_hints_focus_on_hosts_not_plain_prose(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            self._write(temp_dir, "README.md", "Production-looking prose should not be enough.\n")
+            self._write(
+                temp_dir,
+                "README.md",
+                "Production-looking prose and agentsecure.core.product should not be enough.\n",
+            )
             self._write(temp_dir, "config.txt", "API_HOST=api.prod.example.com\n")
 
             report = RepositoryScanner().scan(temp_dir)
@@ -118,6 +122,43 @@ class RepositoryScannerTest(unittest.TestCase):
 
             self.assertEqual(1, len(network_findings))
             self.assertEqual("config.txt", network_findings[0].path)
+
+    def test_json_report_groups_findings_by_severity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write(temp_dir, ".env.production", "SAFE_PLACEHOLDER=value\n")
+
+            report = RepositoryScanner().scan(temp_dir)
+            payload = json.loads(render_report(report, "json"))
+
+            self.assertIn("findings_by_severity", payload)
+            self.assertTrue(payload["findings_by_severity"]["Critical"])
+            self.assertEqual("Production-looking .env file found", payload["findings_by_severity"]["Critical"][0]["title"])
+
+    def test_symlinked_files_are_not_read(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks are not supported")
+        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as outside_dir:
+            outside_secret = "ghp_" + ("B" * 36)
+            self._write(outside_dir, "outside.txt", "GITHUB_TOKEN=%s\n" % outside_secret)
+            os.symlink(os.path.join(outside_dir, "outside.txt"), os.path.join(temp_dir, "linked-secret.txt"))
+
+            report = RepositoryScanner().scan(temp_dir)
+            rendered = render_report(report, "json")
+
+            self.assertEqual([], report.findings)
+            self.assertEqual(1, report.skipped_files)
+            self.assertEqual(-1, rendered.find(outside_secret))
+
+    def test_non_regular_files_are_skipped(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("fifos are not supported")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.mkfifo(os.path.join(temp_dir, "agentsecure-fifo"))
+
+            report = RepositoryScanner().scan(temp_dir)
+
+            self.assertEqual([], report.findings)
+            self.assertEqual(1, report.skipped_files)
 
     def _write(self, root: str, rel_path: str, content: str) -> None:
         path = os.path.join(root, rel_path)

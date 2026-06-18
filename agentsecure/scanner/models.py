@@ -67,6 +67,7 @@ class ScanReport:
         return grouped
 
     def to_dict(self) -> Dict[str, Any]:
+        grouped = self.findings_by_severity()
         return {
             "path": self.path,
             "score": self.score,
@@ -74,6 +75,10 @@ class ScanReport:
             "scanned_files": self.scanned_files,
             "skipped_files": self.skipped_files,
             "findings": [finding.to_dict() for finding in self.findings],
+            "findings_by_severity": {
+                severity: [finding.to_dict() for finding in grouped.get(severity, [])]
+                for severity in SEVERITIES
+            },
             "checklist": CHECKLIST,
         }
 

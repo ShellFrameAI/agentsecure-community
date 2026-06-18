@@ -4,6 +4,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Pattern
+from urllib.parse import urlsplit
 
 from agentsecure.discovery.patterns import mask_secret
 from agentsecure.scanner.models import Finding
@@ -413,17 +414,15 @@ class ScriptRiskRule(Rule):
 
 
 class NetworkProductionHintRule(Rule):
-    HINT_RE = re.compile(
-        r"\b(?:https?://[^\s'\"<>]*(?:prod|production|supabase|firebase|stripe|aws|gcp|azure)[^\s'\"<>]*|"
-        r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9.-]*(?:prod|production|rds\.amazonaws\.com|mongodb\.net|supabase|firebase|stripe|aws|gcp|azure)[A-Za-z0-9.-]*)\b",
-        re.IGNORECASE,
-    )
+    URL_RE = re.compile(r"\bhttps?://[^\s'\"<>]+", re.IGNORECASE)
+    HOST_RE = re.compile(r"\b(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9.-]+\b", re.IGNORECASE)
+    CLOUD_MARKERS = ("rds.amazonaws.com", "mongodb.net", "supabase", "firebase", "stripe", "aws", "gcp", "azure")
 
     def check_file(self, context: FileContext) -> List[Finding]:
         findings: List[Finding] = []
         for line_number, line in enumerate(context.lines, start=1):
-            match = self.HINT_RE.search(line)
-            if match:
+            candidate = self._first_hint(line)
+            if candidate:
                 findings.append(
                     Finding(
                         title="Production or cloud endpoint hint found",
@@ -432,10 +431,39 @@ class NetworkProductionHintRule(Rule):
                         severity="Low",
                         why=WHY_NETWORK,
                         recommendation="Add a network allowlist and make sure agent runs use development endpoints by default.",
-                        evidence=redact_value(match.group(0)),
+                        evidence=redact_value(candidate),
                     )
                 )
         return findings
+
+    def _first_hint(self, line: str) -> Optional[str]:
+        for match in self.URL_RE.finditer(line):
+            candidate = match.group(0)
+            if self._is_hint(candidate):
+                return candidate
+        for match in self.HOST_RE.finditer(line):
+            candidate = match.group(0)
+            if self._is_hint(candidate):
+                return candidate
+        return None
+
+    def _is_hint(self, candidate: str) -> bool:
+        parsed = urlsplit(candidate)
+        host = parsed.hostname or candidate
+        lowered_host = host.lower()
+        if any(marker in lowered_host for marker in self.CLOUD_MARKERS):
+            return True
+        labels = [label for label in lowered_host.split(".") if label]
+        if any(_label_has_prod_token(label) for label in labels):
+            return True
+        path_tokens = [token for token in re.split(r"[^a-z0-9]+", parsed.path.lower()) if token]
+        return any(token in ("prod", "production") for token in path_tokens)
+
+
+def _label_has_prod_token(label: str) -> bool:
+    if label == "production" or "production" in label:
+        return True
+    return bool(re.search(r"(?:^|-)prod(?:-|$)", label))
 
 
 def _strings_in(value: Any) -> Iterable[str]:

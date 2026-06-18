@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
 from agentsecure.cli.main import build_parser, main
@@ -67,6 +67,13 @@ class ScanCliTest(unittest.TestCase):
 
         self.assertEqual("run", args.command)
         self.assertEqual(["--", "echo", "hello"], args.agent_command)
+
+    def test_scan_rejects_missing_path(self):
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(2, main(["scan", "/path/that/does/not/exist"]))
+
+        self.assertIn("scan path is not a directory", stderr.getvalue())
 
     def _write(self, root: str, rel_path: str, content: str) -> None:
         path = os.path.join(root, rel_path)
