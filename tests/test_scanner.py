@@ -111,7 +111,7 @@ class RepositoryScannerTest(unittest.TestCase):
             self._write(
                 temp_dir,
                 "README.md",
-                "Production-looking prose and agentsecure.core.product should not be enough.\n",
+                "Production-looking prose, agentsecure.core.product, firebase.json, and env.production should not be enough.\n",
             )
             self._write(temp_dir, "config.txt", "API_HOST=api.prod.example.com\n")
 

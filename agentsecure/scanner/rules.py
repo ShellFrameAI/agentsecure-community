@@ -417,6 +417,21 @@ class NetworkProductionHintRule(Rule):
     URL_RE = re.compile(r"\bhttps?://[^\s'\"<>]+", re.IGNORECASE)
     HOST_RE = re.compile(r"\b(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9.-]+\b", re.IGNORECASE)
     CLOUD_MARKERS = ("rds.amazonaws.com", "mongodb.net", "supabase", "firebase", "stripe", "aws", "gcp", "azure")
+    FILE_EXTENSIONS = {
+        "cfg",
+        "conf",
+        "env",
+        "ini",
+        "json",
+        "lock",
+        "md",
+        "production",
+        "py",
+        "toml",
+        "txt",
+        "yaml",
+        "yml",
+    }
 
     def check_file(self, context: FileContext) -> List[Finding]:
         findings: List[Finding] = []
@@ -443,7 +458,7 @@ class NetworkProductionHintRule(Rule):
                 return candidate
         for match in self.HOST_RE.finditer(line):
             candidate = match.group(0)
-            if self._is_hint(candidate):
+            if self._looks_like_host(candidate) and self._is_hint(candidate):
                 return candidate
         return None
 
@@ -458,6 +473,16 @@ class NetworkProductionHintRule(Rule):
             return True
         path_tokens = [token for token in re.split(r"[^a-z0-9]+", parsed.path.lower()) if token]
         return any(token in ("prod", "production") for token in path_tokens)
+
+    def _looks_like_host(self, candidate: str) -> bool:
+        labels = [label for label in candidate.lower().strip(".").split(".") if label]
+        if len(labels) < 2:
+            return False
+        if labels[-1] in self.FILE_EXTENSIONS:
+            return False
+        if len(labels) >= 3:
+            return True
+        return any(marker in candidate.lower() for marker in self.CLOUD_MARKERS)
 
 
 def _label_has_prod_token(label: str) -> bool:
