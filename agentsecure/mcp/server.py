@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from agentsecure import __version__
 from agentsecure.mcp.http_request import McpHttpError, perform_http_request
+from agentsecure.mcp.mesh import call_mesh_tool, mesh_tools
 from agentsecure.mcp.runtime import DurationError, SecretAliasError, describe_config, safe_secret_status
 
 
@@ -51,6 +52,8 @@ class McpServer:
             payload = safe_secret_status(self.config_path, str(args.get("env_name", "")))
         elif name == "agentsecure.http.request":
             payload = perform_http_request(self.config_path, args)
+        elif name.startswith("agentsecure.") and name in {tool["name"] for tool in mesh_tools()}:
+            payload = call_mesh_tool(self.config_path, name, args)
         else:
             raise ValueError("unknown AgentSecure MCP tool: %s" % name)
         return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, sort_keys=True)}], "isError": bool(payload.get("blocked"))}
@@ -99,7 +102,7 @@ class McpServer:
                     "additionalProperties": False,
                 },
             },
-        ]
+        ] + mesh_tools()
 
     def _read_message(self, stream):
         first = stream.readline()
