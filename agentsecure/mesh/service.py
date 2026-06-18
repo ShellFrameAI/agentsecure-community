@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -98,7 +99,7 @@ class MeshService:
     def check_messages(self, agent_id: str) -> Dict[str, Any]:
         agent_id = self._required_id(agent_id, "agent_id")
         messages = self.list_messages(agent_id, include_read=False)["messages"]
-        pending = self.list_approvals(status="pending", approver=agent_id)["approvals"]
+        pending = self._pending_approvals_for_agent(agent_id)
         return {
             "agent_id": agent_id,
             "unread_count": len(messages),
@@ -238,10 +239,8 @@ class MeshService:
         for approval in state["approvals"].values():
             if status and approval.get("status") != status:
                 continue
-            if approver:
-                required = approval.get("required_approver") or {}
-                if approver not in (required.get("id"), required.get("agent_id"), required.get("team")):
-                    continue
+            if approver and not self._approval_matches_approver(approval, {approver}):
+                continue
             approvals.append(approval)
         approvals.sort(key=lambda item: item.get("created_at", 0), reverse=True)
         return {"approvals": approvals}
@@ -376,7 +375,33 @@ class MeshService:
 
     def _resource_requires_approval(self, action: str, resource: Dict[str, Any]) -> bool:
         text = " ".join([action, json.dumps(resource, sort_keys=True)]).lower()
-        return any(marker in text for marker in SENSITIVE_ACTION_MARKERS)
+        return any(
+            re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(marker), text)
+            for marker in SENSITIVE_ACTION_MARKERS
+        )
+
+    def _pending_approvals_for_agent(self, agent_id: str) -> List[Dict[str, Any]]:
+        state = self.store.load()
+        agent = state["agents"].get(agent_id) or {}
+        approver_ids = {agent_id}
+        if agent.get("team"):
+            approver_ids.add(str(agent["team"]))
+        approvals = [
+            approval
+            for approval in state["approvals"].values()
+            if approval.get("status") == "pending"
+            and self._approval_matches_approver(approval, approver_ids)
+        ]
+        approvals.sort(key=lambda item: item.get("created_at", 0), reverse=True)
+        return approvals
+
+    def _approval_matches_approver(self, approval: Dict[str, Any], approver_ids: set) -> bool:
+        required = approval.get("required_approver") or {}
+        return any(
+            str(value) in approver_ids
+            for value in (required.get("id"), required.get("agent_id"), required.get("team"))
+            if value is not None
+        )
 
     def _resource_matches(self, expected: Dict[str, Any], value: Any) -> bool:
         text = json.dumps(value, sort_keys=True)

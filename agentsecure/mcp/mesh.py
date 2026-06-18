@@ -50,13 +50,6 @@ def call_mesh_tool(config_path: str, name: str, args: Dict[str, Any]) -> Dict[st
         )
     if name == "agentsecure.get_approval_status":
         return service.get_approval_status(str(args.get("approval_id", "")))
-    if name == "agentsecure.resolve_approval":
-        return service.resolve_approval(
-            approval_id=str(args.get("approval_id", "")),
-            decision=str(args.get("decision", "")),
-            reason=str(args.get("reason", "")),
-            decided_by=str(args.get("decided_by", "human")),
-        )
     if name == "agentsecure.get_policy_hint":
         return service.get_policy_hint(
             agent_id=str(args.get("agent_id", "")),
@@ -131,16 +124,6 @@ def mesh_tools():
             ["requested_by", "action", "reason"],
         ),
         _tool("agentsecure.get_approval_status", {"approval_id": {"type": "string"}}, ["approval_id"]),
-        _tool(
-            "agentsecure.resolve_approval",
-            {
-                "approval_id": {"type": "string"},
-                "decision": {"type": "string"},
-                "reason": {"type": "string"},
-                "decided_by": {"type": "string"},
-            },
-            ["approval_id", "decision"],
-        ),
         _tool(
             "agentsecure.get_policy_hint",
             {

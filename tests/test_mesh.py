@@ -112,6 +112,32 @@ class MeshTest(unittest.TestCase):
             self.assertTrue(hint["blocked"])
             self.assertIn("request_approval", hint["allowed_next_step"])
 
+    def test_policy_hint_does_not_match_prod_inside_product(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+            hint = service.get_policy_hint(
+                "frontend-agent",
+                "send_message",
+                {"type": "code_file", "team": "product", "path": "src/product/catalog.ts"},
+            )
+
+            self.assertFalse(hint["blocked"])
+
+    def test_check_messages_counts_team_assigned_approvals(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+            service.register_agent("backend-agent", name="Backend Agent", team="platform")
+            service.request_approval(
+                requested_by="frontend-agent",
+                action="change_api_contract",
+                resource={"type": "code_change", "team": "platform"},
+                reason="Need platform review.",
+            )
+
+            inbox = service.check_messages("backend-agent")
+
+            self.assertEqual(1, inbox["pending_approval_count"])
+
     def test_cli_mesh_commands_print_json(self):
         with _ProjectContext() as project:
             with redirect_stdout(StringIO()):
@@ -176,6 +202,7 @@ class MeshTest(unittest.TestCase):
             serialized = json.dumps(listed)
             self.assertIn("agentsecure.request_approval", serialized)
             self.assertIn("agentsecure.check_messages", serialized)
+            self.assertNotIn("agentsecure.resolve_approval", serialized)
 
             called = server.handle(
                 {
