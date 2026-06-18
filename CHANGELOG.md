@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.20 - 2026-06-18
+
+- Ignored generated `.agentsecure/` state during `agentsecure scan` to avoid noisy audit-log findings.
+
 ## 0.1.19 - 2026-06-18
 
 - Added `agentsecure scan [path]` and `agentsecure audit [path]` for local AI coding-agent safety reports.

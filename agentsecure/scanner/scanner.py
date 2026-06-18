@@ -19,6 +19,7 @@ from agentsecure.scanner.rules import (
 
 IGNORE_DIRS = {
     ".git",
+    ".agentsecure",
     "node_modules",
     ".venv",
     "venv",
