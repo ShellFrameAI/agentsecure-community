@@ -32,6 +32,8 @@ from agentsecure.cli.common import (
 )
 from agentsecure.cli.demo import run_demo
 from agentsecure.mcp.server import add_mcp_subparser, codex_mcp_add_command, handle_mcp, mcp_install_instructions
+from agentsecure.scanner.reporters import render_report
+from agentsecure.scanner.scanner import RepositoryScanner
 from agentsecure.cli.policy import add_policy_subparser, handle_policy
 from agentsecure.cli.project import (
     _profile_label,
@@ -190,6 +192,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return guard_command(args)
     if args.command == "demo":
         return run_demo(args)
+    if args.command in ("scan", "audit"):
+        return run_scan(args)
     parser.print_help()
     return 2
 
@@ -310,6 +314,19 @@ def build_parser() -> argparse.ArgumentParser:
     protect_parser.add_argument("--protect-all", action="store_true", help="Virtualize all discovered secrets without prompting")
     protect_parser.add_argument("--ttl", default="2h", help="Grant duration, default 2h, max 24h")
 
+    for command_name in ("scan", "audit"):
+        scan_parser = subparsers.add_parser(
+            command_name,
+            help="Scan a repository for AI coding-agent safety risks",
+        )
+        scan_parser.add_argument("path", nargs="?", default=".", help="Repository path to scan, default current directory")
+        scan_parser.add_argument(
+            "--format",
+            choices=["text", "markdown", "json"],
+            default="text",
+            help="Report output format",
+        )
+
     init_parser = subparsers.add_parser("init", help="Initialize AgentSecure in this project")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing AgentSecure config")
     init_parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
@@ -377,6 +394,16 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser = subparsers.add_parser("demo", help="Run a local-only community .env masking demo")
     demo_parser.add_argument("--keep", action="store_true", help="Keep the temporary demo project")
     return parser
+
+
+def run_scan(args: argparse.Namespace) -> int:
+    path = getattr(args, "path", ".") or "."
+    if not os.path.isdir(path):
+        sys.stderr.write("agentsecure: scan path is not a directory: %s\n" % path)
+        return 2
+    report = RepositoryScanner().scan(path)
+    sys.stdout.write(render_report(report, args.format))
+    return 0
 
 
 def run_agent(args: argparse.Namespace) -> int:

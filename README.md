@@ -57,6 +57,26 @@ agentsecure mcp install claude
 
 Those commands print the local MCP setup for this project. For Codex, AgentSecure prints a `codex mcp add ...` command. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
 
+## AI Coding Agent Security Scanner
+
+Before running Claude Code, Cursor, Codex, Windsurf, GitHub Copilot agents, or any AI coding agent on your repo, run a local security scan to detect secrets, risky MCP configs, and dangerous scripts:
+
+```bash
+agentsecure scan .
+```
+
+The scanner reports an agent-safety score, grouped findings, and a short checklist. It checks for agent-visible dotenv files, cloud/API key patterns, MCP configurations with broad filesystem or shell access, risky package scripts, shell scripts, Docker compose commands, and production-looking network hints.
+
+The scan is local-only: AgentSecure does not upload files, secrets, source code, or telemetry. It is an additional audit and checklist tool, not a replacement for AgentSecure runtime protection. Use it before agent work, then still run sensitive sessions through AgentSecure.
+
+Formats:
+
+```bash
+agentsecure scan . --format text
+agentsecure scan . --format markdown
+agentsecure scan . --format json
+```
+
 ## Where Secrets Go
 
 Keep real secrets in one local AgentSecure vault:

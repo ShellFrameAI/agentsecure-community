@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19 - 2026-06-18
+
+- Added `agentsecure scan [path]` and `agentsecure audit [path]` for local AI coding-agent safety reports.
+- Added text, Markdown, and JSON scanner reports with severity grouping, score, risk level, and checklist.
+- Added local-only checks for sensitive files, secret-looking values, AI agent config files, risky MCP configurations, risky scripts, and production/cloud endpoint hints.
+- Redacted scanner evidence in all output formats and hardened scans to skip symlinks and non-regular files.
+
 ## 0.1.18 - 2026-06-12
 
 - Added `secret_runtime.mode` policy configuration with `strict`, `virtual`, and `compat` modes.
