@@ -160,6 +160,16 @@ class RepositoryScannerTest(unittest.TestCase):
             self.assertEqual([], report.findings)
             self.assertEqual(1, report.skipped_files)
 
+    def test_agentsecure_generated_state_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write(temp_dir, ".agentsecure/audit.log", "destination=prod.example.com\n")
+            self._write(temp_dir, "README.md", "# Demo\n")
+
+            report = RepositoryScanner().scan(temp_dir)
+
+            self.assertEqual([], report.findings)
+            self.assertEqual(1, report.scanned_files)
+
     def _write(self, root: str, rel_path: str, content: str) -> None:
         path = os.path.join(root, rel_path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
