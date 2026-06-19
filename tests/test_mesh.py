@@ -242,7 +242,7 @@ class MeshTest(unittest.TestCase):
                     "backend-agent",
                     ["codex"],
                     cwd=project["project_dir"],
-                    env={"OPENAI_API_KEY": "sk-real-openai-secret"},
+                    env={"OPENAI_API_KEY": "sk-demo-local-secret-do-not-use"},
                 )
 
             service.set_launch_profile(
@@ -253,7 +253,7 @@ class MeshTest(unittest.TestCase):
             )
             old_value = os.environ.get("OPENAI_API_KEY")
             try:
-                os.environ["OPENAI_API_KEY"] = "sk-parent-secret-value-123456789"
+                os.environ["OPENAI_API_KEY"] = "sk-demo-local-secret-do-not-use"
                 launch_env = service._launch_environment({"AGENTSECURE_AGENT_ID": "backend-agent", "NODE_ENV": "test"})
             finally:
                 if old_value is None:
