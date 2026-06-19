@@ -9,6 +9,7 @@ EMPTY_STATE = {
     "agents": {},
     "messages": {},
     "approvals": {},
+    "launch_profiles": {},
 }
 
 
@@ -28,7 +29,7 @@ class LocalMeshStore:
             return json.loads(json.dumps(EMPTY_STATE))
         state = json.loads(json.dumps(EMPTY_STATE))
         state.update(data)
-        for key in ("agents", "messages", "approvals"):
+        for key in ("agents", "messages", "approvals", "launch_profiles"):
             if not isinstance(state.get(key), dict):
                 state[key] = {}
         return state

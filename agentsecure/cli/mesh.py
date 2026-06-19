@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+import shlex
 import sys
 from typing import Any, Dict
 
@@ -19,6 +21,9 @@ def add_mesh_subparser(subparsers) -> None:
     register.add_argument("--trust-level", default="local")
     register.add_argument("--scope", action="append", default=[])
     register.add_argument("--owner", default="")
+
+    run_profile = mesh_subparsers.add_parser("use-agent", help="Print shell exports for an Agent Mesh identity")
+    run_profile.add_argument("agent_id")
 
     identity = mesh_subparsers.add_parser("identity", help="Show one or all local agent identities")
     identity.add_argument("--agent-id", default="")
@@ -107,6 +112,31 @@ def add_mesh_subparser(subparsers) -> None:
     audit_alias.add_argument("--limit", type=int, default=50)
     audit_alias.add_argument("--json", action="store_true", help="Accepted for desktop compatibility; output is always JSON")
 
+    wake = mesh_subparsers.add_parser("wake", help="Wake or notify a mesh agent when messages are waiting")
+    wake.add_argument("--to", required=True)
+    wake.add_argument("--reason", default="")
+    wake.add_argument("--launch", action="store_true")
+
+    watch = mesh_subparsers.add_parser("watch", help="Watch an agent inbox and wake on unread messages")
+    watch.add_argument("--agent-id", required=True)
+    watch.add_argument("--once", action="store_true")
+    watch.add_argument("--interval", type=float, default=5.0)
+    watch.add_argument("--launch", action="store_true")
+
+    launch = mesh_subparsers.add_parser("launch-agent", help="Launch an agent from its mesh launch profile")
+    launch.add_argument("--agent-id", required=True)
+
+    launch_profile = mesh_subparsers.add_parser("launch-profile", help="Manage local agent launch profiles")
+    launch_profile_subparsers = launch_profile.add_subparsers(dest="launch_profile_action")
+    set_profile = launch_profile_subparsers.add_parser("set", help="Set a launch profile")
+    set_profile.add_argument("--agent-id", required=True)
+    set_profile.add_argument("--cwd", default="")
+    set_profile.add_argument("--wake-mode", choices=["notify", "launch"], default="notify")
+    set_profile.add_argument("--env", action="append", default=[], help="Extra KEY=VALUE environment entry")
+    set_profile.add_argument("--cmd", nargs=argparse.REMAINDER, required=True)
+    show_profile = launch_profile_subparsers.add_parser("show", help="Show launch profiles")
+    show_profile.add_argument("--agent-id", default="")
+
 
 def handle_mesh(args: argparse.Namespace) -> int:
     command = getattr(args, "mesh_command", "")
@@ -125,6 +155,12 @@ def handle_mesh(args: argparse.Namespace) -> int:
                     owner=args.owner,
                 )
             )
+        if command == "use-agent":
+            agent_id = str(args.agent_id).strip()
+            if not agent_id:
+                raise ValueError("agent_id is required")
+            print("export AGENTSECURE_AGENT_ID=%s" % shlex.quote(agent_id))
+            return 0
         if command == "identity":
             return _print(service.identity(args.agent_id))
         if command == "agents":
@@ -195,6 +231,29 @@ def handle_mesh(args: argparse.Namespace) -> int:
             return _print(_recent_denials(service, limit=args.limit))
         if command == "audit":
             return _print(service.audit_context(limit=args.limit))
+        if command == "wake":
+            return _print(service.wake(args.to, reason=args.reason, launch=args.launch))
+        if command == "watch":
+            return _print(service.watch(args.agent_id, once=args.once, interval_seconds=args.interval, launch=args.launch))
+        if command == "launch-agent":
+            return _print(service.launch_agent(args.agent_id))
+        if command == "launch-profile":
+            action = getattr(args, "launch_profile_action", "")
+            if action == "set":
+                command_parts = list(args.cmd)
+                if command_parts and command_parts[0] == "--":
+                    command_parts = command_parts[1:]
+                return _print(
+                    service.set_launch_profile(
+                        args.agent_id,
+                        command_parts,
+                        cwd=args.cwd or os.getcwd(),
+                        env=_env_args(args.env),
+                        wake_mode=args.wake_mode,
+                    )
+                )
+            if action == "show":
+                return _print(service.launch_profiles(args.agent_id))
     except ValueError as exc:
         sys.stderr.write("agentsecure mesh: %s\n" % exc)
         return 2
@@ -248,3 +307,16 @@ def _recent_denials(service: MeshService, limit: int = 50) -> Dict[str, Any]:
             }
         )
     return {"denials": denials[-int(limit):]}
+
+
+def _env_args(values) -> Dict[str, str]:
+    env = {}
+    for value in values or []:
+        if "=" not in str(value):
+            raise ValueError("env entries must be KEY=VALUE")
+        key, raw = str(value).split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError("env key is required")
+        env[key] = raw
+    return env
