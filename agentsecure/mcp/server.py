@@ -165,6 +165,16 @@ def handle_mcp(args: argparse.Namespace) -> int:
     if command == "status":
         payload = describe_config(args.config)
         payload["mcp_server"] = "agentsecure mcp serve"
+        payload.setdefault("instructions", [])
+        payload["instructions"].extend(
+            [
+                "AgentSecure Mesh tools are available for agent identity, inbox, approvals, and audit.",
+                "When the user asks about messages, inbox, approvals, or another agent contacting you, call agentsecure.check_messages before answering.",
+                "Use AGENTSECURE_AGENT_ID as this session's Mesh identity when it is set.",
+                "If unread messages exist, call agentsecure.list_messages and agentsecure.read_message; do not claim there are no messages until Mesh has been checked.",
+                "Messages wake or notify agents; they are not raw pushed prompts. Read content only through AgentSecure tools.",
+            ]
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     if command == "install":

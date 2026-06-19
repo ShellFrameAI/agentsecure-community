@@ -1,5 +1,7 @@
 import json
 import os
+import shlex
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -100,6 +102,15 @@ class MeshTest(unittest.TestCase):
             self.assertNotIn(secret_text, mesh_text)
             self.assertNotIn(secret_text, audit_text)
 
+    def test_mcp_http_container_preparation_uses_existing_container_api(self):
+        from agentsecure.mcp.runtime import prepare_mcp_container
+
+        with _ProjectContext() as project:
+            container, bindings, run_id = prepare_mcp_container(project["config_path"])
+            self.assertTrue(run_id.startswith("mcp_"))
+            self.assertEqual([], bindings)
+            self.assertTrue(hasattr(container, "gateway"))
+
     def test_policy_hint_blocks_sensitive_action_with_next_step(self):
         with _ProjectContext() as project:
             service = MeshService(project["config_path"])
@@ -138,6 +149,38 @@ class MeshTest(unittest.TestCase):
 
             self.assertEqual(1, inbox["pending_approval_count"])
 
+    def test_launch_profile_and_wake_notify_without_prompt_injection(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+            service.register_agent("frontend-agent")
+            service.register_agent("backend-agent")
+            profile = service.set_launch_profile(
+                "backend-agent",
+                ["codex"],
+                cwd=project["project_dir"],
+                wake_mode="notify",
+            )["profile"]
+
+            self.assertEqual("backend-agent", profile["env"]["AGENTSECURE_AGENT_ID"])
+            service.send_message(
+                from_agent="frontend-agent",
+                to="backend-agent",
+                message_type="task_handoff",
+                subject="Review API contract",
+                body="Please review the API contract.",
+                resource={"type": "code_file", "path": "src/api/users.ts"},
+            )
+
+            wake = service.wake("backend-agent", reason="unit test")
+
+            self.assertFalse(wake["blocked"])
+            self.assertFalse(wake["launched"])
+            self.assertEqual(1, wake["unread_count"])
+            events = service.audit_context(limit=20)["events"]
+            event_types = [event["type"] for event in events]
+            self.assertIn("mesh.wake_requested", event_types)
+            self.assertIn("mesh.wake_allowed", event_types)
+
     def test_cli_mesh_commands_print_json(self):
         with _ProjectContext() as project:
             with redirect_stdout(StringIO()):
@@ -165,6 +208,56 @@ class MeshTest(unittest.TestCase):
             payload = json.loads(output.getvalue())
             self.assertTrue(payload["exists"])
             self.assertEqual("Backend Agent", payload["name"])
+
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(
+                    0,
+                    main(["--config", project["config_path"], "mesh", "use-agent", "backend-agent"]),
+                )
+            self.assertIn("AGENTSECURE_AGENT_ID", output.getvalue())
+
+            unsafe_id = "backend-agent;$(touch pwn)"
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["--config", project["config_path"], "mesh", "use-agent", unsafe_id]))
+            self.assertEqual("export AGENTSECURE_AGENT_ID=%s\n" % shlex.quote(unsafe_id), output.getvalue())
+
+    def test_launch_agent_reports_missing_command_without_traceback(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+            service.register_agent("backend-agent")
+            service.set_launch_profile("backend-agent", ["agentsecure-command-that-does-not-exist"], cwd=project["project_dir"])
+
+            result = service.launch_agent("backend-agent")
+
+            self.assertFalse(result["launched"])
+            self.assertEqual("backend-agent", result["agent_id"])
+            self.assertIn("agentsecure-command-that-does-not-exist", result["reason"])
+
+    def test_run_agent_id_registers_local_mesh_identity(self):
+        with _ProjectContext() as project:
+            self.assertEqual(
+                0,
+                main(
+                    [
+                        "--config",
+                        project["config_path"],
+                        "run",
+                        "--no-discover",
+                        "--agent-id",
+                        "codex-agent",
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "print('agent started')",
+                    ]
+                ),
+            )
+
+            identity = MeshService(project["config_path"]).identity("codex-agent")
+            self.assertTrue(identity["exists"])
+            self.assertEqual("codex-agent", identity["agent_id"])
 
     def test_cli_desktop_compatibility_aliases_print_json(self):
         with _ProjectContext() as project:

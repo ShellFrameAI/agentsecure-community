@@ -2,9 +2,13 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import subprocess
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from agentsecure.cloud import CloudError, CloudRuntimeService
 from agentsecure.core.config import JsonConfigLoader
 from agentsecure.core.models import AgentSecureConfig
 from agentsecure.implementations.audit import JsonLineAuditLogger
@@ -58,6 +62,7 @@ class MeshService:
         if not os.path.isabs(audit_path):
             audit_path = os.path.join(os.path.dirname(self.config_path) or os.getcwd(), audit_path)
         self.audit = JsonLineAuditLogger(audit_path)
+        self.cloud = CloudRuntimeService()
 
     def register_agent(
         self,
@@ -85,7 +90,30 @@ class MeshService:
         state["agents"][agent_id] = identity.to_dict()
         self.store.save(state)
         self._record("mesh.agent_registered", identity.to_dict())
-        return identity.to_dict()
+        result = identity.to_dict()
+        if self._cloud_enrolled():
+            try:
+                self.cloud.register_mesh_agent(
+                    {
+                        "agent_id": agent_id,
+                        "name": identity.name,
+                        "agent_type": identity.type,
+                        "runtime": "agentsecure",
+                        "workspace": identity.workspace,
+                        "status": "active",
+                        "trust_level": identity.trust_level,
+                        "capabilities": {
+                            "team": identity.team,
+                            "owner": identity.owner,
+                            "allowed_scopes": identity.allowed_scopes,
+                        },
+                    }
+                )
+                result["cloud_registered"] = True
+            except CloudError as exc:
+                result["cloud_registered"] = False
+                result["cloud_error"] = str(exc)
+        return result
 
     def identity(self, agent_id: str = "") -> Dict[str, Any]:
         state = self.store.load()
@@ -98,8 +126,19 @@ class MeshService:
 
     def check_messages(self, agent_id: str) -> Dict[str, Any]:
         agent_id = self._required_id(agent_id, "agent_id")
-        messages = self.list_messages(agent_id, include_read=False)["messages"]
+        message_result = self.list_messages(agent_id, include_read=False)
+        messages = message_result["messages"]
         pending = self._pending_approvals_for_agent(agent_id)
+        if message_result.get("blocked"):
+            return {
+                "blocked": True,
+                "agent_id": agent_id,
+                "unread_count": len(messages),
+                "pending_approval_count": len(pending),
+                "reason": message_result.get("reason", ""),
+                "allowed_next_step": message_result.get("allowed_next_step", ""),
+                "notice": "AgentSecure Cloud messages are unavailable. %s" % message_result.get("reason", ""),
+            }
         return {
             "agent_id": agent_id,
             "unread_count": len(messages),
@@ -112,6 +151,17 @@ class MeshService:
 
     def list_messages(self, agent_id: str, include_read: bool = False) -> Dict[str, Any]:
         agent_id = self._required_id(agent_id, "agent_id")
+        if self._cloud_enrolled():
+            try:
+                return self.cloud.mesh_messages(agent_id=agent_id, include_read=include_read)
+            except CloudError as exc:
+                return {
+                    "blocked": True,
+                    "agent_id": agent_id,
+                    "messages": [],
+                    "reason": str(exc),
+                    "allowed_next_step": "retry after AgentSecure Cloud is reachable",
+                }
         state = self.store.load()
         messages = []
         for message in state["messages"].values():
@@ -126,6 +176,16 @@ class MeshService:
     def read_message(self, message_id: str, agent_id: str = "") -> Dict[str, Any]:
         message_id = self._required_id(message_id, "message_id")
         agent_id = self._required_id(agent_id, "agent_id")
+        if self._cloud_enrolled():
+            try:
+                result = self.cloud.read_mesh_message(message_id, agent_id=agent_id)
+                message = result.get("message", result)
+                if isinstance(message, dict) and message.get("message_id"):
+                    self._record("mesh.message_read", {"message_id": message_id, "reader": agent_id})
+                    return message
+                raise ValueError("cloud read did not return a mesh message")
+            except CloudError as exc:
+                raise ValueError("cloud message read failed: %s" % exc)
         state = self.store.load()
         message = state["messages"].get(message_id)
         if not message:
@@ -159,6 +219,37 @@ class MeshService:
         if policy["blocked"]:
             denial = self._policy_denial(from_agent, "send_message", resource or {}, policy)
             return denial
+        if self._cloud_enrolled():
+            try:
+                result = self.cloud.create_mesh_message(
+                    self._cloud_message_payload(
+                        from_agent,
+                        to,
+                        message_type,
+                        subject,
+                        body,
+                        resource or {},
+                        reply_to,
+                    )
+                )
+                message = result.get("message", {}) if isinstance(result, dict) else {}
+                self._record(
+                    "mesh.message_sent",
+                    {
+                        "message_id": message.get("message_id", ""),
+                        "from_agent": from_agent,
+                        "to": to,
+                        "delivery_status": result.get("delivery_status", ""),
+                        "approval_id": result.get("approval_id", ""),
+                    },
+                )
+                return result
+            except CloudError as exc:
+                return {
+                    "blocked": True,
+                    "reason": str(exc),
+                    "allowed_next_step": "retry after AgentSecure Cloud is reachable",
+                }
         message_id = "msg_" + uuid.uuid4().hex[:16]
         thread_id = message_id
         if reply_to:
@@ -185,6 +276,27 @@ class MeshService:
         return {"blocked": False, "message": message}
 
     def reply_message(self, message_id: str, from_agent: str, body: str) -> Dict[str, Any]:
+        if self._cloud_enrolled():
+            from_agent = self._required_id(from_agent, "from_agent")
+            try:
+                result = self.cloud.reply_mesh_message(message_id, {"from_agent": from_agent, "body": "[redacted]"})
+                message = result.get("message", {}) if isinstance(result, dict) else {}
+                self._record(
+                    "mesh.message_sent",
+                    {
+                        "message_id": message.get("message_id", ""),
+                        "from_agent": from_agent,
+                        "to": message.get("to", ""),
+                        "delivery_status": result.get("delivery_status", ""),
+                    },
+                )
+                return result
+            except CloudError as exc:
+                return {
+                    "blocked": True,
+                    "reason": str(exc),
+                    "allowed_next_step": "retry after AgentSecure Cloud is reachable",
+                }
         original = self.read_message(message_id, agent_id=from_agent)
         return self.send_message(
             from_agent=from_agent,
@@ -315,6 +427,108 @@ class MeshService:
                     events.append(event)
         return {"events": events[-int(limit):]}
 
+    def set_launch_profile(
+        self,
+        agent_id: str,
+        command: List[str],
+        cwd: str = "",
+        env: Optional[Dict[str, str]] = None,
+        wake_mode: str = "notify",
+    ) -> Dict[str, Any]:
+        agent_id = self._required_id(agent_id, "agent_id")
+        if not command:
+            raise ValueError("launch command is required")
+        profile = {
+            "agent_id": agent_id,
+            "command": [str(item) for item in command],
+            "cwd": os.path.abspath(os.path.expanduser(cwd or os.getcwd())),
+            "env": {str(key): str(value) for key, value in (env or {}).items()},
+            "wake_mode": wake_mode if wake_mode in ("notify", "launch") else "notify",
+            "updated_at": now_ts(),
+        }
+        profile["env"].setdefault("AGENTSECURE_AGENT_ID", agent_id)
+        state = self.store.load()
+        state["launch_profiles"][agent_id] = profile
+        self.store.save(state)
+        self._record("mesh.launch_profile_saved", {"agent_id": agent_id, "wake_mode": profile["wake_mode"]})
+        return {"profile": profile}
+
+    def launch_profiles(self, agent_id: str = "") -> Dict[str, Any]:
+        state = self.store.load()
+        profiles = state.get("launch_profiles", {})
+        if agent_id:
+            return {"profile": profiles.get(agent_id)}
+        return {"profiles": sorted(profiles.values(), key=lambda item: item.get("agent_id", ""))}
+
+    def wake(self, agent_id: str, reason: str = "", launch: bool = False) -> Dict[str, Any]:
+        agent_id = self._required_id(agent_id, "agent_id")
+        check = self.check_messages(agent_id)
+        blocked = bool(check.get("blocked"))
+        unread_count = int(check.get("unread_count", 0) or 0)
+        details = {
+            "agent_id": agent_id,
+            "reason": self._text_summary(reason),
+            "unread_count": unread_count,
+            "blocked": blocked,
+        }
+        self._record("mesh.wake_requested", details)
+        if blocked:
+            self._record("mesh.wake_denied", details)
+            return {"blocked": True, **details, "allowed_next_step": check.get("allowed_next_step", "")}
+        if unread_count <= 0:
+            self._record("mesh.wake_notified", {**details, "status": "no_unread_messages"})
+            return {"blocked": False, **details, "launched": False, "notice": "No unread messages for %s." % agent_id}
+        self._record("mesh.wake_allowed", details)
+        profile = (self.launch_profiles(agent_id).get("profile") or {})
+        should_launch = launch or profile.get("wake_mode") == "launch"
+        if should_launch and profile:
+            launch_result = self.launch_agent(agent_id)
+            return {"blocked": False, **details, **launch_result}
+        self._record("mesh.wake_notified", {**details, "status": "notified"})
+        return {
+            "blocked": False,
+            **details,
+            "launched": False,
+            "notice": "Agent %s has %s unread AgentSecure message(s)." % (agent_id, unread_count),
+        }
+
+    def launch_agent(self, agent_id: str) -> Dict[str, Any]:
+        agent_id = self._required_id(agent_id, "agent_id")
+        profile = self.launch_profiles(agent_id).get("profile")
+        if not profile:
+            return {
+                "launched": False,
+                "reason": "no launch profile configured",
+                "allowed_next_step": "agentsecure mesh launch-profile set --agent-id %s --cmd <command>" % shlex.quote(agent_id),
+            }
+        command = [str(item) for item in profile.get("command", []) if str(item)]
+        if not command:
+            raise ValueError("launch profile for %s has no command" % agent_id)
+        cwd = str(profile.get("cwd") or os.getcwd())
+        env = os.environ.copy()
+        env.update({str(key): str(value) for key, value in (profile.get("env") or {}).items()})
+        env["AGENTSECURE_AGENT_ID"] = agent_id
+        self._record("mesh.agent_launch_requested", {"agent_id": agent_id, "cwd": cwd})
+        try:
+            process = subprocess.Popen(command, cwd=cwd, env=env)
+        except OSError as exc:
+            self._record("mesh.agent_launch_failed", {"agent_id": agent_id, "cwd": cwd, "error": str(exc)})
+            return {"launched": False, "agent_id": agent_id, "reason": str(exc)}
+        self._record("mesh.agent_launched", {"agent_id": agent_id, "pid": process.pid})
+        return {"launched": True, "pid": process.pid, "agent_id": agent_id}
+
+    def watch(self, agent_id: str, once: bool = False, interval_seconds: float = 5.0, launch: bool = False) -> Dict[str, Any]:
+        agent_id = self._required_id(agent_id, "agent_id")
+        interval_seconds = max(1.0, float(interval_seconds))
+        while True:
+            check = self.check_messages(agent_id)
+            if int(check.get("unread_count", 0) or 0) > 0 or check.get("blocked"):
+                result = self.wake(agent_id, reason="watch detected unread AgentSecure messages", launch=launch)
+                return {"agent_id": agent_id, "check": check, **result}
+            if once:
+                return {"agent_id": agent_id, "check": check, "woke": False}
+            time.sleep(interval_seconds)
+
     def _load_config(self) -> AgentSecureConfig:
         if not os.path.exists(self.config_path):
             return AgentSecureConfig()
@@ -329,6 +543,12 @@ class MeshService:
 
     def _record(self, event_type: str, details: Dict[str, Any]) -> None:
         self.audit.record(event_type, self._safe_details(details))
+
+    def _cloud_enrolled(self) -> bool:
+        try:
+            return bool(self.cloud.status().get("enrolled"))
+        except CloudError:
+            return False
 
     def _policy_denial(
         self,
@@ -346,6 +566,26 @@ class MeshService:
         }
         self._record("mesh.policy_denied", details)
         return {"blocked": True, **details}
+
+    def _cloud_message_payload(
+        self,
+        from_agent: str,
+        to: str,
+        message_type: str,
+        subject: str,
+        body: str,
+        resource: Dict[str, Any],
+        reply_to: str = "",
+    ) -> Dict[str, Any]:
+        return {
+            "from_agent": from_agent,
+            "to": to,
+            "type": message_type,
+            "subject": "[redacted]" if subject else "",
+            "body": "[redacted]" if body else "",
+            "resource": self._safe_resource(resource),
+            "reply_to": reply_to,
+        }
 
     def _hint(
         self,

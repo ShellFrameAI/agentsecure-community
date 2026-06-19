@@ -33,6 +33,7 @@ from agentsecure.cli.common import (
 from agentsecure.cli.demo import run_demo
 from agentsecure.mcp.server import add_mcp_subparser, codex_mcp_add_command, handle_mcp, mcp_install_instructions
 from agentsecure.cli.mesh import add_mesh_subparser, handle_mesh
+from agentsecure.mesh import MeshService
 from agentsecure.scanner.reporters import render_report
 from agentsecure.scanner.scanner import RepositoryScanner
 from agentsecure.cli.policy import add_policy_subparser, handle_policy
@@ -254,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace strategy. symlink is fast and lets normal edits hit the real project; copy is safer review mode.",
     )
     run_parser.add_argument("--ttl", default="2h", help="Grant duration for protected discovered secrets")
+    run_parser.add_argument("--agent-id", default="", help="AgentSecure Mesh identity for this agent session")
     run_parser.add_argument("agent_command", nargs=argparse.REMAINDER)
 
     start_parser = subparsers.add_parser("start", help="Guided setup for vault secrets and MCP")
@@ -423,6 +425,7 @@ def run_agent(args: argparse.Namespace) -> int:
         _pull_cloud_policy(args.config, cloud)
     project_name = getattr(args, "project", "") or os.path.basename(os.getcwd()) or "default"
     task_label = getattr(args, "task", "") or "Untitled session"
+    mesh_agent_id = str(getattr(args, "agent_id", "") or os.environ.get("AGENTSECURE_AGENT_ID", "")).strip()
     replacements = []
     if not args.no_discover:
         replacements = protect_secrets(args)
@@ -430,6 +433,17 @@ def run_agent(args: argparse.Namespace) -> int:
             return replacements
     if not os.path.exists(args.config):
         ProductService(args.config, _scanner()).init_project()
+    if mesh_agent_id:
+        try:
+            MeshService(args.config).register_agent(
+                agent_id=mesh_agent_id,
+                name=mesh_agent_id,
+                agent_type="coding_agent",
+                workspace=project_name,
+                trust_level="local",
+            )
+        except Exception as exc:
+            sys.stderr.write("agentsecure: mesh agent registration failed: %s\n" % exc)
     try:
         initial_config = JsonConfigLoader().load(args.config)
     except FileNotFoundError:
@@ -575,6 +589,8 @@ def run_agent(args: argparse.Namespace) -> int:
     session_id = daemon_session.get("session_id", "") if daemon_session else ""
     if session_id:
         env["AGENTSECURE_SESSION_ID"] = session_id
+    if mesh_agent_id:
+        env["AGENTSECURE_AGENT_ID"] = mesh_agent_id
     proxy_url = _proxy_url(gateway_host, gateway_port, session_id)
     env["AGENTSECURE_PROXY_URL"] = proxy_url
     proxy_enabled = bool(getattr(args, "strict_proxy", False) or args.runtime == "workspace")
@@ -608,6 +624,7 @@ def run_agent(args: argparse.Namespace) -> int:
             "project": project_name,
             "task": task_label,
             "session_id": session_id,
+            "mesh_agent_id": mesh_agent_id,
             "daemon": bool(daemon),
         },
     )
@@ -628,6 +645,8 @@ def run_agent(args: argparse.Namespace) -> int:
         )
         if session_id:
             cloud_session["session_id"] = session_id
+        if mesh_agent_id:
+            cloud_session["mesh_agent_id"] = mesh_agent_id
         if getattr(args, "cloud_debug", False):
             os.environ["AGENTSECURE_CLOUD_DEBUG"] = "true"
     session_finished = False
