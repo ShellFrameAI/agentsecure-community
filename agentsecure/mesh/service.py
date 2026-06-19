@@ -51,6 +51,44 @@ SAFE_RESOURCE_KEYS = {
     "type",
 }
 
+SAFE_LAUNCH_ENV_KEYS = {
+    "AGENTSECURE_AGENT_ID",
+    "CI",
+    "COLORTERM",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LOGNAME",
+    "NODE_ENV",
+    "PATH",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "USER",
+}
+
+SECRET_ENV_MARKERS = (
+    "ACCESS_TOKEN",
+    "APIKEY",
+    "API_KEY",
+    "AUTH",
+    "BEARER",
+    "CLIENT_SECRET",
+    "CONNECTION_STRING",
+    "COOKIE",
+    "CREDENTIAL",
+    "DATABASE_URL",
+    "DB_URL",
+    "JWT",
+    "KEY",
+    "OAUTH",
+    "PASSWORD",
+    "PRIVATE",
+    "SECRET",
+    "TOKEN",
+)
+
 
 class MeshService:
     def __init__(self, config_path: str) -> None:
@@ -438,15 +476,15 @@ class MeshService:
         agent_id = self._required_id(agent_id, "agent_id")
         if not command:
             raise ValueError("launch command is required")
+        safe_env = self._safe_launch_profile_env(env or {}, agent_id)
         profile = {
             "agent_id": agent_id,
             "command": [str(item) for item in command],
             "cwd": os.path.abspath(os.path.expanduser(cwd or os.getcwd())),
-            "env": {str(key): str(value) for key, value in (env or {}).items()},
+            "env": safe_env,
             "wake_mode": wake_mode if wake_mode in ("notify", "launch") else "notify",
             "updated_at": now_ts(),
         }
-        profile["env"].setdefault("AGENTSECURE_AGENT_ID", agent_id)
         state = self.store.load()
         state["launch_profiles"][agent_id] = profile
         self.store.save(state)
@@ -505,8 +543,7 @@ class MeshService:
         if not command:
             raise ValueError("launch profile for %s has no command" % agent_id)
         cwd = str(profile.get("cwd") or os.getcwd())
-        env = os.environ.copy()
-        env.update({str(key): str(value) for key, value in (profile.get("env") or {}).items()})
+        env = self._launch_environment(profile.get("env") or {})
         env["AGENTSECURE_AGENT_ID"] = agent_id
         self._record("mesh.agent_launch_requested", {"agent_id": agent_id, "cwd": cwd})
         try:
@@ -581,8 +618,8 @@ class MeshService:
             "from_agent": from_agent,
             "to": to,
             "type": message_type,
-            "subject": "[redacted]" if subject else "",
-            "body": "[redacted]" if body else "",
+            "subject": self._text_summary(subject),
+            "body": self._text_summary(body),
             "resource": self._safe_resource(resource),
             "reply_to": reply_to,
         }
@@ -672,6 +709,62 @@ class MeshService:
                 details[text_key + "_summary"] = self._text_summary(text)
         return details
 
+    def _safe_launch_profile_env(self, env: Dict[str, str], agent_id: str) -> Dict[str, str]:
+        safe: Dict[str, str] = {"AGENTSECURE_AGENT_ID": agent_id}
+        for key, value in env.items():
+            name = str(key or "").strip()
+            text = str(value or "")
+            if not name:
+                continue
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                raise ValueError("launch profile env key must be a valid environment variable name: %s" % name)
+            if name != "AGENTSECURE_AGENT_ID" and self._is_secret_env_name(name):
+                raise ValueError("launch profile env must not persist secret-like key: %s" % name)
+            if self._looks_secret_text(text):
+                raise ValueError("launch profile env %s looks secret-like; use AgentSecure secrets instead" % name)
+            safe[name] = text
+        return safe
+
+    def _launch_environment(self, profile_env: Dict[str, str]) -> Dict[str, str]:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key in SAFE_LAUNCH_ENV_KEYS and not self._looks_secret_text(value)
+        }
+        env.update(self._safe_launch_profile_env(profile_env, str(profile_env.get("AGENTSECURE_AGENT_ID", ""))))
+        env.update(self._virtual_secret_environment())
+        return env
+
+    def _virtual_secret_environment(self) -> Dict[str, str]:
+        environment: Dict[str, str] = {}
+        for binding in self.config.secrets:
+            rule = self.config.env_policy.rule_for(binding.env_name)
+            if rule.mode == "deny":
+                continue
+            if binding.virtual_token:
+                environment[binding.env_name] = binding.virtual_token
+        return environment
+
+    def _is_secret_env_name(self, name: str) -> bool:
+        normalized = str(name or "").upper()
+        return any(marker in normalized for marker in SECRET_ENV_MARKERS)
+
+    def _looks_secret_text(self, value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lower = text.lower()
+        return (
+            "\n" in text
+            or "-----begin" in lower
+            or "authorization:" in lower
+            or "cookie:" in lower
+            or "password=" in lower
+            or "token=" in lower
+            or "api_key=" in lower
+            or bool(re.search(r"\b(sk|pk|ghp|gho|github_pat|xox[baprs])-?[a-z0-9_]{16,}", lower))
+        )
+
     def _safe_resource(self, resource: Dict[str, Any]) -> Dict[str, Any]:
         safe: Dict[str, Any] = {}
         for key, value in (resource or {}).items():
@@ -699,7 +792,7 @@ class MeshService:
         text = " ".join(str(value or "").split())
         if not text:
             return ""
-        if "=" in text:
+        if "=" in text or self._looks_secret_text(text):
             return "[redacted]"
         return text[:120]
 

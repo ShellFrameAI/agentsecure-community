@@ -234,6 +234,62 @@ class MeshTest(unittest.TestCase):
             self.assertEqual("backend-agent", result["agent_id"])
             self.assertIn("agentsecure-command-that-does-not-exist", result["reason"])
 
+    def test_launch_profile_rejects_secret_env_and_sanitizes_parent_env(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+            with self.assertRaises(ValueError):
+                service.set_launch_profile(
+                    "backend-agent",
+                    ["codex"],
+                    cwd=project["project_dir"],
+                    env={"OPENAI_API_KEY": "sk-real-openai-secret"},
+                )
+
+            service.set_launch_profile(
+                "backend-agent",
+                ["codex"],
+                cwd=project["project_dir"],
+                env={"NODE_ENV": "test"},
+            )
+            old_value = os.environ.get("OPENAI_API_KEY")
+            try:
+                os.environ["OPENAI_API_KEY"] = "sk-parent-secret-value-123456789"
+                launch_env = service._launch_environment({"AGENTSECURE_AGENT_ID": "backend-agent", "NODE_ENV": "test"})
+            finally:
+                if old_value is None:
+                    os.environ.pop("OPENAI_API_KEY", None)
+                else:
+                    os.environ["OPENAI_API_KEY"] = old_value
+
+            self.assertNotIn("OPENAI_API_KEY", launch_env)
+            self.assertEqual("backend-agent", launch_env["AGENTSECURE_AGENT_ID"])
+            self.assertEqual("test", launch_env["NODE_ENV"])
+
+    def test_cloud_message_payload_preserves_safe_summaries(self):
+        with _ProjectContext() as project:
+            service = MeshService(project["config_path"])
+
+            payload = service._cloud_message_payload(
+                "frontend-agent",
+                "backend-agent",
+                "question",
+                "API contract",
+                "Can I rename fullName to name?",
+                {"type": "code_file", "path": "src/api/users.ts"},
+            )
+
+            self.assertEqual("API contract", payload["subject"])
+            self.assertEqual("Can I rename fullName to name?", payload["body"])
+            redacted = service._cloud_message_payload(
+                "frontend-agent",
+                "backend-agent",
+                "question",
+                "API key",
+                "TOKEN=super-sensitive-value",
+                {"type": "code_file", "path": "src/api/users.ts"},
+            )
+            self.assertEqual("[redacted]", redacted["body"])
+
     def test_run_agent_id_registration_helper_registers_local_mesh_identity(self):
         with _ProjectContext() as project:
             _register_mesh_agent_identity(project["config_path"], "codex-agent", "test-project")
