@@ -412,6 +412,21 @@ def run_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _register_mesh_agent_identity(config_path: str, agent_id: str, project_name: str) -> None:
+    if not agent_id:
+        return
+    try:
+        MeshService(config_path).register_agent(
+            agent_id=agent_id,
+            name=agent_id,
+            agent_type="coding_agent",
+            workspace=project_name,
+            trust_level="local",
+        )
+    except Exception as exc:
+        sys.stderr.write("agentsecure: mesh agent registration failed: %s\n" % exc)
+
+
 def run_agent(args: argparse.Namespace) -> int:
     run_id = "run_" + uuid.uuid4().hex[:16]
     project_id = project_id_for_path(args.config)
@@ -433,17 +448,7 @@ def run_agent(args: argparse.Namespace) -> int:
             return replacements
     if not os.path.exists(args.config):
         ProductService(args.config, _scanner()).init_project()
-    if mesh_agent_id:
-        try:
-            MeshService(args.config).register_agent(
-                agent_id=mesh_agent_id,
-                name=mesh_agent_id,
-                agent_type="coding_agent",
-                workspace=project_name,
-                trust_level="local",
-            )
-        except Exception as exc:
-            sys.stderr.write("agentsecure: mesh agent registration failed: %s\n" % exc)
+    _register_mesh_agent_identity(args.config, mesh_agent_id, project_name)
     try:
         initial_config = JsonConfigLoader().load(args.config)
     except FileNotFoundError:

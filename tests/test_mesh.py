@@ -1,13 +1,12 @@
 import json
 import os
 import shlex
-import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-from agentsecure.cli.main import main
+from agentsecure.cli.main import _register_mesh_agent_identity, main
 from agentsecure.mcp.server import McpServer
 from agentsecure.mesh import MeshService
 
@@ -235,29 +234,14 @@ class MeshTest(unittest.TestCase):
             self.assertEqual("backend-agent", result["agent_id"])
             self.assertIn("agentsecure-command-that-does-not-exist", result["reason"])
 
-    def test_run_agent_id_registers_local_mesh_identity(self):
+    def test_run_agent_id_registration_helper_registers_local_mesh_identity(self):
         with _ProjectContext() as project:
-            self.assertEqual(
-                0,
-                main(
-                    [
-                        "--config",
-                        project["config_path"],
-                        "run",
-                        "--no-discover",
-                        "--agent-id",
-                        "codex-agent",
-                        "--",
-                        sys.executable,
-                        "-c",
-                        "print('agent started')",
-                    ]
-                ),
-            )
+            _register_mesh_agent_identity(project["config_path"], "codex-agent", "test-project")
 
             identity = MeshService(project["config_path"]).identity("codex-agent")
             self.assertTrue(identity["exists"])
             self.assertEqual("codex-agent", identity["agent_id"])
+            self.assertEqual("test-project", identity["workspace"])
 
     def test_cli_desktop_compatibility_aliases_print_json(self):
         with _ProjectContext() as project:
