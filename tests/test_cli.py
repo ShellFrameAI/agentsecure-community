@@ -314,6 +314,99 @@ class CliTest(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_start_claude_writes_persistent_claude_instructions_without_overwriting(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            claude_path = os.path.join(temp_dir, "CLAUDE.md")
+            with open(claude_path, "w") as handle:
+                handle.write("# Existing Claude Instructions\n\nKeep this Claude-specific rule.\n")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "claude", "--yes"]),
+                    )
+                with open(claude_path, "r") as handle:
+                    first = handle.read()
+                self.assertIn("Keep this Claude-specific rule.", first)
+                self.assertIn("agentsecure.http.request", first)
+                self.assertIn("agentsecure doctor", first)
+                self.assertEqual(1, first.count("<!-- agentsecure:start -->"))
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "claude", "--yes"]),
+                    )
+                with open(claude_path, "r") as handle:
+                    second = handle.read()
+                self.assertEqual(first, second)
+                self.assertEqual(1, second.count("<!-- agentsecure:start -->"))
+                self.assertIn("Agent instructions: unchanged CLAUDE.md", output.getvalue())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_both_clients_reports_both_persistent_instruction_files(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "both", "--yes", "--json"]),
+                    )
+                payload = json.loads(output.getvalue())
+                instruction_step = [
+                    step for step in payload["steps"] if step["name"] == "agent_instructions"
+                ][0]
+                self.assertEqual(["AGENTS.md", "CLAUDE.md"], instruction_step["paths"])
+                self.assertTrue(os.path.exists("AGENTS.md"))
+                self.assertTrue(os.path.exists("CLAUDE.md"))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_can_skip_all_persistent_agent_instruction_files(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(
+                            [
+                                "--config",
+                                config_path,
+                                "start",
+                                "--skip-import",
+                                "--client",
+                                "claude",
+                                "--no-agent-instructions",
+                                "--yes",
+                            ]
+                        ),
+                    )
+                self.assertFalse(os.path.exists("AGENTS.md"))
+                self.assertFalse(os.path.exists("CLAUDE.md"))
+                self.assertIn("Agent instructions: skipped", output.getvalue())
+            finally:
+                os.chdir(old_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

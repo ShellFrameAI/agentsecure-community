@@ -4,6 +4,20 @@ Use this inside your own repo.
 
 ## 1. Install
 
+If the repository already uses uv, Poetry, Pipenv, Conda, or an active virtual
+environment, keep that toolchain. The
+[Claude Code setup guide](docs/claude-code-setup.md) contains a copyable prompt
+that detects the stack before installing anything.
+
+For uv as an isolated command-line tool:
+
+```bash
+uv tool install agentsecure
+agentsecure --version
+```
+
+For pip and venv:
+
 ```bash
 cd your-repo
 
@@ -29,7 +43,7 @@ export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ## 2. Init
 
 ```bash
-agentsecure init
+agentsecure start --client claude
 ```
 
 This creates:
@@ -37,6 +51,8 @@ This creates:
 ```text
 agentsecure.json
 .agentsecure/
+AGENTS.md
+CLAUDE.md
 ```
 
 Do not commit `.agentsecure/`.

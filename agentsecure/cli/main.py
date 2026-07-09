@@ -118,6 +118,7 @@ from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_
 
 INTERACTIVE_AGENT_COMMANDS = set(SUPPORTED_AGENTS)
 AGENTS_MD = "AGENTS.md"
+CLAUDE_MD = "CLAUDE.md"
 AGENTSECURE_AGENTS_START = "<!-- agentsecure:start -->"
 AGENTSECURE_AGENTS_END = "<!-- agentsecure:end -->"
 
@@ -265,7 +266,11 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--approved-host", "--allow", action="append", default=[], help="Credential destination URL or host to approve")
     start_parser.add_argument("--client", choices=["codex", "claude", "both", "none"], default="codex", help="Agent client to configure")
     start_parser.add_argument("--install-mcp", action="store_true", help="Run codex mcp add when --client is codex or both")
-    start_parser.add_argument("--no-agent-instructions", action="store_true", help="Do not write AgentSecure guidance to AGENTS.md")
+    start_parser.add_argument(
+        "--no-agent-instructions",
+        action="store_true",
+        help="Do not write persistent AgentSecure guidance for the selected agent client",
+    )
     start_parser.add_argument("--yes", action="store_true", help="Use safe defaults without prompting")
     start_parser.add_argument("--json", action="store_true", help="Print machine-readable summary")
 
@@ -811,19 +816,26 @@ def start_onboarding(args: argparse.Namespace) -> int:
         summary["steps"].append({"name": "agent_instructions", "status": "skipped"})
         _start_print(args, "Agent instructions: skipped")
     else:
-        agent_instructions = _write_project_agent_instructions(AGENTS_MD)
+        instruction_paths = _project_agent_instruction_paths(args.client)
+        instruction_results = [
+            _write_project_agent_instructions(path) for path in instruction_paths
+        ]
+        instruction_status = _combined_instruction_status(instruction_results)
         summary["steps"].append(
             {
                 "name": "agent_instructions",
-                "status": agent_instructions["status"],
-                "path": agent_instructions["path"],
+                "status": instruction_status,
+                "path": instruction_results[0]["path"],
+                "paths": [result["path"] for result in instruction_results],
+                "files": instruction_results,
             }
         )
-        _start_print(
-            args,
-            "Agent instructions: %s %s"
-            % (agent_instructions["status"], agent_instructions["path"]),
-        )
+        for result in instruction_results:
+            _start_print(
+                args,
+                "Agent instructions: %s %s"
+                % (result["status"], result["path"]),
+            )
 
     clients = []
     if args.client == "both":
@@ -853,9 +865,28 @@ def start_onboarding(args: argparse.Namespace) -> int:
         print("Ready.")
         print("Start your agent normally.")
         if not args.no_agent_instructions:
-            print("Agent instructions were written to %s." % AGENTS_MD)
+            print(
+                "Agent instructions are available in %s."
+                % ", ".join(_project_agent_instruction_paths(args.client))
+            )
         print("For secret API calls, the agent should use AgentSecure MCP `agentsecure.http.request`.")
     return 0
+
+
+def _project_agent_instruction_paths(client: str) -> List[str]:
+    paths = [AGENTS_MD]
+    if client in ("claude", "both"):
+        paths.append(CLAUDE_MD)
+    return paths
+
+
+def _combined_instruction_status(results: List[Dict[str, str]]) -> str:
+    statuses = {result["status"] for result in results}
+    if "created" in statuses:
+        return "created"
+    if "updated" in statuses:
+        return "updated"
+    return "unchanged"
 
 
 def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
@@ -901,6 +932,8 @@ def _project_agent_instructions_section() -> str:
         "## AgentSecure Secret Usage",
         "",
         "This project uses AgentSecure for secrets.",
+        "",
+        "At the start of a fresh session, run `agentsecure doctor` to verify the local setup before using protected secrets. If the command is project-managed, use the existing prefix such as `uv run`, `poetry run`, or `pipenv run`.",
         "",
         "Real secrets are stored in the local AgentSecure vault. The `.env` file may contain safe placeholders such as `AGENTSECURE_ALIAS_*`, not real credentials.",
         "",

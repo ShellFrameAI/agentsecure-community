@@ -14,6 +14,26 @@ The community release is intentionally scoped to local CLI, local command guard,
 
 ## Install
 
+### Let Claude Code adapt setup to your repository
+
+Copy the prompt in the [Claude Code setup guide](docs/claude-code-setup.md).
+Claude first detects whether the repository uses uv, Poetry, Pipenv, an existing
+virtual environment, or pip, then uses that toolchain instead of assuming
+`pip`/`venv`.
+
+For an existing uv setup, AgentSecure can be installed as an isolated tool:
+
+```bash
+uv tool install agentsecure
+agentsecure start --client claude
+```
+
+`start --client claude` preserves existing project instructions and writes a
+bounded AgentSecure section to `CLAUDE.md`, so a fresh Claude Code session can
+discover the setup without relying on the previous conversation.
+
+### Install with pip
+
 ```bash
 python3 -m pip install --upgrade agentsecure
 python3 -m agentsecure demo

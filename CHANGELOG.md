@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added persistent, idempotent `CLAUDE.md` guidance for `agentsecure start --client claude` while preserving existing project instructions and the current `AGENTS.md` behavior.
+- Added a Claude-readable, stack-aware setup guide for uv, Poetry, Pipenv, and existing pip environments, plus an `llms.txt` index.
+
 ## 0.1.20 - 2026-06-18
 
 - Ignored generated `.agentsecure/` state during `agentsecure scan` to avoid noisy audit-log findings.
