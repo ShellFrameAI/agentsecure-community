@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+## 0.1.21 - 2026-07-13
+
 - Added persistent, idempotent `CLAUDE.md` guidance for `agentsecure start --client claude` while preserving existing project instructions and the current `AGENTS.md` behavior.
-- Added a Claude-readable, stack-aware setup guide for uv, Poetry, Pipenv, and existing pip environments, plus an `llms.txt` index.
+- Added a Claude-readable setup guide for installing AgentSecure as an isolated command-line tool, plus an `llms.txt` index.
+- Preserved the legacy JSON `status` and `path` meaning for `AGENTS.md` while adding per-file results and `overall_status` for multi-file onboarding.
+- Refused to modify symbolic links and non-regular `AGENTS.md` or `CLAUDE.md` paths during onboarding.
 
 ## 0.1.20 - 2026-06-18
 

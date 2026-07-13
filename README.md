@@ -14,14 +14,11 @@ The community release is intentionally scoped to local CLI, local command guard,
 
 ## Install
 
-### Let Claude Code adapt setup to your repository
+### Set up Claude Code
 
 Copy the prompt in the [Claude Code setup guide](docs/claude-code-setup.md).
-Claude first detects whether the repository uses uv, Poetry, Pipenv, an existing
-virtual environment, or pip, then uses that toolchain instead of assuming
-`pip`/`venv`.
-
-For an existing uv setup, AgentSecure can be installed as an isolated tool:
+AgentSecure is installed as an isolated command-line tool so setup does not
+change the repository's application dependencies or lock files:
 
 ```bash
 uv tool install agentsecure

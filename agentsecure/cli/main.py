@@ -8,6 +8,7 @@ import queue
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -121,6 +122,10 @@ AGENTS_MD = "AGENTS.md"
 CLAUDE_MD = "CLAUDE.md"
 AGENTSECURE_AGENTS_START = "<!-- agentsecure:start -->"
 AGENTSECURE_AGENTS_END = "<!-- agentsecure:end -->"
+
+
+class AgentInstructionPathError(ValueError):
+    """Raised when an instruction path is unsafe to modify automatically."""
 
 
 class LocalGatewayHandle:
@@ -745,6 +750,27 @@ def start_onboarding(args: argparse.Namespace) -> int:
         "steps": [],
         "mcp": {},
     }
+
+    instruction_paths = []
+    if not args.no_agent_instructions:
+        instruction_paths = _project_agent_instruction_paths(args.client)
+        try:
+            for path in instruction_paths:
+                _validate_project_agent_instruction_path(path)
+        except AgentInstructionPathError as exc:
+            summary["steps"].append(
+                {
+                    "name": "agent_instructions",
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            if args.json:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                sys.stderr.write("agentsecure: %s\n" % exc)
+            return 1
+
     if not args.json:
         print("AgentSecure start")
         print("Project: %s" % os.getcwd())
@@ -816,16 +842,17 @@ def start_onboarding(args: argparse.Namespace) -> int:
         summary["steps"].append({"name": "agent_instructions", "status": "skipped"})
         _start_print(args, "Agent instructions: skipped")
     else:
-        instruction_paths = _project_agent_instruction_paths(args.client)
         instruction_results = [
             _write_project_agent_instructions(path) for path in instruction_paths
         ]
         instruction_status = _combined_instruction_status(instruction_results)
+        legacy_result = instruction_results[0]
         summary["steps"].append(
             {
                 "name": "agent_instructions",
-                "status": instruction_status,
-                "path": instruction_results[0]["path"],
+                "status": legacy_result["status"],
+                "path": legacy_result["path"],
+                "overall_status": instruction_status,
                 "paths": [result["path"] for result in instruction_results],
                 "files": instruction_results,
             }
@@ -890,6 +917,7 @@ def _combined_instruction_status(results: List[Dict[str, str]]) -> str:
 
 
 def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
+    _validate_project_agent_instruction_path(path)
     section = _project_agent_instructions_section()
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
@@ -904,6 +932,26 @@ def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(updated)
     return {"path": path, "status": status}
+
+
+def _validate_project_agent_instruction_path(path: str) -> None:
+    try:
+        path_stat = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise AgentInstructionPathError(
+            "%s cannot be inspected safely: %s" % (path, exc)
+        )
+
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise AgentInstructionPathError(
+            "%s is a symbolic link; AgentSecure will not modify it automatically" % path
+        )
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise AgentInstructionPathError(
+            "%s is not a regular file; AgentSecure will not modify it automatically" % path
+        )
 
 
 def _replace_or_append_agentsecure_section(current: str, section: str) -> str:
@@ -933,7 +981,7 @@ def _project_agent_instructions_section() -> str:
         "",
         "This project uses AgentSecure for secrets.",
         "",
-        "At the start of a fresh session, run `agentsecure doctor` to verify the local setup before using protected secrets. If the command is project-managed, use the existing prefix such as `uv run`, `poetry run`, or `pipenv run`.",
+        "At the start of a fresh session, run `agentsecure doctor` to verify the local setup before using protected secrets.",
         "",
         "Real secrets are stored in the local AgentSecure vault. The `.env` file may contain safe placeholders such as `AGENTSECURE_ALIAS_*`, not real credentials.",
         "",

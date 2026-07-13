@@ -4,12 +4,12 @@ Use this inside your own repo.
 
 ## 1. Install
 
-If the repository already uses uv, Poetry, Pipenv, Conda, or an active virtual
-environment, keep that toolchain. The
-[Claude Code setup guide](docs/claude-code-setup.md) contains a copyable prompt
-that detects the stack before installing anything.
+Install AgentSecure as an isolated command-line tool. Do not add it to the
+project's application dependencies or lock files. The
+[Claude Code setup guide](docs/claude-code-setup.md) contains a copyable setup
+prompt.
 
-For uv as an isolated command-line tool:
+With uv:
 
 ```bash
 uv tool install agentsecure
