@@ -28,6 +28,7 @@ from agentsecure.api.services import ApiServices
 from agentsecure.cli.common import (
     cloud_features_disabled as _cloud_features_disabled,
     cloud_features_enabled as _cloud_features_enabled,
+    normalize_network_destination,
     scanner as _scanner,
     update_allowed_domains,
 )
@@ -1901,7 +1902,10 @@ def _approved_hosts_for_import(secret: DiscoveredSecret, extra_hosts: List[str])
     provider_host = provider_hosts.get(secret.provider_hint)
     if provider_host:
         hosts.append(provider_host)
-    hosts.extend(extra_hosts or [])
+    for value in extra_hosts or []:
+        normalized_host, _ = normalize_network_destination(value)
+        if normalized_host:
+            hosts.append(normalized_host)
     result = []
     seen = set()
     for host in hosts:
