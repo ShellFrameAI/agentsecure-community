@@ -4,6 +4,20 @@ Use this inside your own repo.
 
 ## 1. Install
 
+Install AgentSecure as an isolated command-line tool. Do not add it to the
+project's application dependencies or lock files. The
+[Claude Code setup guide](docs/claude-code-setup.md) contains a copyable setup
+prompt.
+
+With uv:
+
+```bash
+uv tool install agentsecure
+agentsecure --version
+```
+
+For pip and venv:
+
 ```bash
 cd your-repo
 
@@ -29,7 +43,7 @@ export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ## 2. Init
 
 ```bash
-agentsecure init
+agentsecure start --client claude
 ```
 
 This creates:
@@ -37,6 +51,8 @@ This creates:
 ```text
 agentsecure.json
 .agentsecure/
+AGENTS.md
+CLAUDE.md
 ```
 
 Do not commit `.agentsecure/`.

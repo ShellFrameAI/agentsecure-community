@@ -8,6 +8,7 @@ import queue
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -118,8 +119,13 @@ from agentsecure.workspace.materializer import WorkspaceMaterializer, make_tree_
 
 INTERACTIVE_AGENT_COMMANDS = set(SUPPORTED_AGENTS)
 AGENTS_MD = "AGENTS.md"
+CLAUDE_MD = "CLAUDE.md"
 AGENTSECURE_AGENTS_START = "<!-- agentsecure:start -->"
 AGENTSECURE_AGENTS_END = "<!-- agentsecure:end -->"
+
+
+class AgentInstructionPathError(ValueError):
+    """Raised when an instruction path is unsafe to modify automatically."""
 
 
 class LocalGatewayHandle:
@@ -265,7 +271,11 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--approved-host", "--allow", action="append", default=[], help="Credential destination URL or host to approve")
     start_parser.add_argument("--client", choices=["codex", "claude", "both", "none"], default="codex", help="Agent client to configure")
     start_parser.add_argument("--install-mcp", action="store_true", help="Run codex mcp add when --client is codex or both")
-    start_parser.add_argument("--no-agent-instructions", action="store_true", help="Do not write AgentSecure guidance to AGENTS.md")
+    start_parser.add_argument(
+        "--no-agent-instructions",
+        action="store_true",
+        help="Do not write persistent AgentSecure guidance for the selected agent client",
+    )
     start_parser.add_argument("--yes", action="store_true", help="Use safe defaults without prompting")
     start_parser.add_argument("--json", action="store_true", help="Print machine-readable summary")
 
@@ -740,6 +750,27 @@ def start_onboarding(args: argparse.Namespace) -> int:
         "steps": [],
         "mcp": {},
     }
+
+    instruction_paths = []
+    if not args.no_agent_instructions:
+        instruction_paths = _project_agent_instruction_paths(args.client)
+        try:
+            for path in instruction_paths:
+                _validate_project_agent_instruction_path(path)
+        except AgentInstructionPathError as exc:
+            summary["steps"].append(
+                {
+                    "name": "agent_instructions",
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+            if args.json:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                sys.stderr.write("agentsecure: %s\n" % exc)
+            return 1
+
     if not args.json:
         print("AgentSecure start")
         print("Project: %s" % os.getcwd())
@@ -811,19 +842,27 @@ def start_onboarding(args: argparse.Namespace) -> int:
         summary["steps"].append({"name": "agent_instructions", "status": "skipped"})
         _start_print(args, "Agent instructions: skipped")
     else:
-        agent_instructions = _write_project_agent_instructions(AGENTS_MD)
+        instruction_results = [
+            _write_project_agent_instructions(path) for path in instruction_paths
+        ]
+        instruction_status = _combined_instruction_status(instruction_results)
+        legacy_result = instruction_results[0]
         summary["steps"].append(
             {
                 "name": "agent_instructions",
-                "status": agent_instructions["status"],
-                "path": agent_instructions["path"],
+                "status": legacy_result["status"],
+                "path": legacy_result["path"],
+                "overall_status": instruction_status,
+                "paths": [result["path"] for result in instruction_results],
+                "files": instruction_results,
             }
         )
-        _start_print(
-            args,
-            "Agent instructions: %s %s"
-            % (agent_instructions["status"], agent_instructions["path"]),
-        )
+        for result in instruction_results:
+            _start_print(
+                args,
+                "Agent instructions: %s %s"
+                % (result["status"], result["path"]),
+            )
 
     clients = []
     if args.client == "both":
@@ -853,12 +892,32 @@ def start_onboarding(args: argparse.Namespace) -> int:
         print("Ready.")
         print("Start your agent normally.")
         if not args.no_agent_instructions:
-            print("Agent instructions were written to %s." % AGENTS_MD)
+            print(
+                "Agent instructions are available in %s."
+                % ", ".join(_project_agent_instruction_paths(args.client))
+            )
         print("For secret API calls, the agent should use AgentSecure MCP `agentsecure.http.request`.")
     return 0
 
 
+def _project_agent_instruction_paths(client: str) -> List[str]:
+    paths = [AGENTS_MD]
+    if client in ("claude", "both"):
+        paths.append(CLAUDE_MD)
+    return paths
+
+
+def _combined_instruction_status(results: List[Dict[str, str]]) -> str:
+    statuses = {result["status"] for result in results}
+    if "created" in statuses:
+        return "created"
+    if "updated" in statuses:
+        return "updated"
+    return "unchanged"
+
+
 def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
+    _validate_project_agent_instruction_path(path)
     section = _project_agent_instructions_section()
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as handle:
@@ -873,6 +932,26 @@ def _write_project_agent_instructions(path: str = AGENTS_MD) -> Dict[str, str]:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(updated)
     return {"path": path, "status": status}
+
+
+def _validate_project_agent_instruction_path(path: str) -> None:
+    try:
+        path_stat = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise AgentInstructionPathError(
+            "%s cannot be inspected safely: %s" % (path, exc)
+        )
+
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise AgentInstructionPathError(
+            "%s is a symbolic link; AgentSecure will not modify it automatically" % path
+        )
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise AgentInstructionPathError(
+            "%s is not a regular file; AgentSecure will not modify it automatically" % path
+        )
 
 
 def _replace_or_append_agentsecure_section(current: str, section: str) -> str:
@@ -901,6 +980,8 @@ def _project_agent_instructions_section() -> str:
         "## AgentSecure Secret Usage",
         "",
         "This project uses AgentSecure for secrets.",
+        "",
+        "At the start of a fresh session, run `agentsecure doctor` to verify the local setup before using protected secrets.",
         "",
         "Real secrets are stored in the local AgentSecure vault. The `.env` file may contain safe placeholders such as `AGENTSECURE_ALIAS_*`, not real credentials.",
         "",

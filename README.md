@@ -14,6 +14,23 @@ The community release is intentionally scoped to local CLI, local command guard,
 
 ## Install
 
+### Set up Claude Code
+
+Copy the prompt in the [Claude Code setup guide](docs/claude-code-setup.md).
+AgentSecure is installed as an isolated command-line tool so setup does not
+change the repository's application dependencies or lock files:
+
+```bash
+uv tool install agentsecure
+agentsecure start --client claude
+```
+
+`start --client claude` preserves existing project instructions and writes a
+bounded AgentSecure section to `CLAUDE.md`, so a fresh Claude Code session can
+discover the setup without relying on the previous conversation.
+
+### Install with pip
+
 ```bash
 python3 -m pip install --upgrade agentsecure
 python3 -m agentsecure demo

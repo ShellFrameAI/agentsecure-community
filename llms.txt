@@ -1,0 +1,16 @@
+# AgentSecure Community
+
+AgentSecure is a local-first security runtime for AI coding agents. Real secrets
+stay in a local vault and agents use bounded placeholders and MCP tools.
+
+## Agent setup
+
+- [Claude Code setup](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/claude-code-setup.md)
+- [Project overview and CLI reference](https://github.com/ShellFrameAI/agentsecure-community/blob/main/README.md)
+- [Security model](https://github.com/ShellFrameAI/agentsecure-community/blob/main/SECURITY.md)
+- [Contribution guide](https://github.com/ShellFrameAI/agentsecure-community/blob/main/CONTRIBUTING.md)
+
+For Claude Code, inspect the repository's existing Python toolchain before
+installation, then run `agentsecure start --client claude`. This creates or
+updates persistent AgentSecure guidance in `CLAUDE.md` without replacing
+existing project instructions.

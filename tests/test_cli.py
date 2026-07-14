@@ -4,7 +4,7 @@ import os
 import tempfile
 import json
 from io import StringIO
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from agentsecure.cli.common import update_allowed_domains
@@ -311,6 +311,211 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(first, second)
                 self.assertEqual(1, second.count("<!-- agentsecure:start -->"))
                 self.assertIn("Agent instructions: unchanged AGENTS.md", output.getvalue())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_claude_writes_persistent_claude_instructions_without_overwriting(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            claude_path = os.path.join(temp_dir, "CLAUDE.md")
+            with open(claude_path, "w") as handle:
+                handle.write("# Existing Claude Instructions\n\nKeep this Claude-specific rule.\n")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "claude", "--yes"]),
+                    )
+                with open(claude_path, "r") as handle:
+                    first = handle.read()
+                self.assertIn("Keep this Claude-specific rule.", first)
+                self.assertIn("agentsecure.http.request", first)
+                self.assertIn("agentsecure doctor", first)
+                self.assertEqual(1, first.count("<!-- agentsecure:start -->"))
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "claude", "--yes"]),
+                    )
+                with open(claude_path, "r") as handle:
+                    second = handle.read()
+                self.assertEqual(first, second)
+                self.assertEqual(1, second.count("<!-- agentsecure:start -->"))
+                self.assertIn("Agent instructions: unchanged CLAUDE.md", output.getvalue())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_both_clients_reports_both_persistent_instruction_files(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "both", "--yes", "--json"]),
+                    )
+                payload = json.loads(output.getvalue())
+                instruction_step = [
+                    step for step in payload["steps"] if step["name"] == "agent_instructions"
+                ][0]
+                self.assertEqual("created", instruction_step["status"])
+                self.assertEqual("created", instruction_step["overall_status"])
+                self.assertEqual(["AGENTS.md", "CLAUDE.md"], instruction_step["paths"])
+                self.assertTrue(os.path.exists("AGENTS.md"))
+                self.assertTrue(os.path.exists("CLAUDE.md"))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_json_preserves_legacy_agents_status_for_mixed_results(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "none", "--yes"]),
+                    )
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "start", "--skip-import", "--client", "claude", "--yes", "--json"]),
+                    )
+                payload = json.loads(output.getvalue())
+                instruction_step = [
+                    step for step in payload["steps"] if step["name"] == "agent_instructions"
+                ][0]
+                self.assertEqual("AGENTS.md", instruction_step["path"])
+                self.assertEqual("unchanged", instruction_step["status"])
+                self.assertEqual("created", instruction_step["overall_status"])
+                self.assertEqual(
+                    [
+                        {"path": "AGENTS.md", "status": "unchanged"},
+                        {"path": "CLAUDE.md", "status": "created"},
+                    ],
+                    instruction_step["files"],
+                )
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_rejects_symlinked_instruction_file_without_modifying_target(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = os.path.join(temp_dir, "shared-instructions.md")
+            agents_path = os.path.join(temp_dir, "AGENTS.md")
+            with open(target_path, "w", encoding="utf-8") as handle:
+                handle.write("Do not change this file.\n")
+            os.symlink(target_path, agents_path)
+
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                error = StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(
+                        1,
+                        main(["start", "--skip-import", "--client", "none", "--yes"]),
+                    )
+                self.assertIn("AGENTS.md is a symbolic link", error.getvalue())
+                with open(target_path, "r", encoding="utf-8") as handle:
+                    self.assertEqual("Do not change this file.\n", handle.read())
+                self.assertFalse(os.path.exists(os.path.join(temp_dir, "agentsecure.json")))
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_rejects_claude_symlink_before_modifying_agents(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = os.path.join(temp_dir, "shared-claude.md")
+            claude_path = os.path.join(temp_dir, "CLAUDE.md")
+            with open(target_path, "w", encoding="utf-8") as handle:
+                handle.write("Shared Claude instructions.\n")
+            os.symlink(target_path, claude_path)
+
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        1,
+                        main(["start", "--skip-import", "--client", "claude", "--yes", "--json"]),
+                    )
+                payload = json.loads(output.getvalue())
+                instruction_step = payload["steps"][0]
+                self.assertEqual("failed", instruction_step["status"])
+                self.assertIn("CLAUDE.md is a symbolic link", instruction_step["error"])
+                self.assertFalse(os.path.exists(os.path.join(temp_dir, "AGENTS.md")))
+                with open(target_path, "r", encoding="utf-8") as handle:
+                    self.assertEqual("Shared Claude instructions.\n", handle.read())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_rejects_non_regular_instruction_path(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.mkdir(os.path.join(temp_dir, "AGENTS.md"))
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                error = StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(
+                        1,
+                        main(["start", "--skip-import", "--client", "none", "--yes"]),
+                    )
+                self.assertIn("AGENTS.md is not a regular file", error.getvalue())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_start_can_skip_all_persistent_agent_instruction_files(self):
+        from agentsecure.cli.main import main
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = os.path.join(temp_dir, "agentsecure.json")
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(
+                            [
+                                "--config",
+                                config_path,
+                                "start",
+                                "--skip-import",
+                                "--client",
+                                "claude",
+                                "--no-agent-instructions",
+                                "--yes",
+                            ]
+                        ),
+                    )
+                self.assertFalse(os.path.exists("AGENTS.md"))
+                self.assertFalse(os.path.exists("CLAUDE.md"))
+                self.assertIn("Agent instructions: skipped", output.getvalue())
             finally:
                 os.chdir(old_cwd)
 
