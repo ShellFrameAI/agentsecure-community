@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.22 - 2026-07-14
+
+- Added an end-to-end secret canary release gate covering guided setup, protected agent execution, approved MCP credential use, response redaction, and audit-log safety.
+- Normalized URL-form `--approved-host` values before storing per-secret host policy so the network allowlist and secret resolver enforce the same destination.
+- Simplified the README quick start to install, optionally scan, run guided setup, and start the coding agent normally.
+
 ## 0.1.21 - 2026-07-13
 
 - Added persistent, idempotent `CLAUDE.md` guidance for `agentsecure start --client claude` while preserving existing project instructions and the current `AGENTS.md` behavior.
