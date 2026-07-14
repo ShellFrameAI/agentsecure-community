@@ -12,67 +12,93 @@ AgentSecure Community is a local-first CLI for AI coding-agent workflows. It dem
 
 The community release is intentionally scoped to local CLI, local command guard, basic policy config, local secret virtualization, and tests. Hosted cloud sync, enterprise policy management, billing/licensing, and sensitive commercial detection logic are not part of this release.
 
-## Install
+## Quick Start
 
-### Set up Claude Code
+Run these commands from the repository you want to protect.
 
-Copy the prompt in the [Claude Code setup guide](docs/claude-code-setup.md).
-AgentSecure is installed as an isolated command-line tool so setup does not
-change the repository's application dependencies or lock files:
+### 1. Install the CLI
+
+Install AgentSecure once as an isolated command-line tool so it does not change
+your project's dependencies or lock files:
 
 ```bash
 uv tool install agentsecure
+```
+
+If AgentSecure is already installed, update it with
+`uv tool upgrade agentsecure`.
+
+### 2. Optional: inspect what the agent can access
+
+```bash
+agentsecure scan .
+```
+
+The scan is local-only, does not change the repository, and shows secrets,
+risky MCP configuration, dangerous scripts, and other resources an AI coding
+agent may be able to access.
+
+### 3. Set up protection
+
+For Claude Code:
+
+```bash
 agentsecure start --client claude
 ```
 
-`start --client claude` preserves existing project instructions and writes a
-bounded AgentSecure section to `CLAUDE.md`, so a fresh Claude Code session can
-discover the setup without relying on the previous conversation.
+For Codex:
 
-### Install with pip
+```bash
+agentsecure start --client codex --install-mcp
+```
+
+`agentsecure start` is guided setup, not a long-running background service. It
+initializes the project, offers to move `.env` secrets into the local vault,
+writes bounded AgentSecure guidance to `CLAUDE.md` and/or `AGENTS.md`, and
+prints or installs the MCP configuration for the selected client.
+
+If AgentSecure prints an MCP configuration step, apply it before continuing.
+
+### 4. Start your agent normally
+
+```bash
+claude
+# or
+codex
+```
+
+That's it. Use the agent normally. The repository instructions tell the agent
+to use AgentSecure MCP for secret-bearing requests without asking for or
+reading real secret values.
+
+A separate `agentsecure discover` step is not required in the main setup flow:
+`agentsecure start` already handles `.env` discovery and import. The
+`discover` command remains available for manual inspection.
+
+Want Claude Code to perform the setup for you? Copy the prompt in the
+[Claude Code setup guide](docs/claude-code-setup.md).
+
+### Install with pip instead
 
 ```bash
 python3 -m pip install --upgrade agentsecure
-python3 -m agentsecure demo
 ```
 
-`python3 -m agentsecure` works even when `pip` installs the `agentsecure`
-executable into a user script directory that is not on your `PATH`. If you want
-the shorter `agentsecure` command, add Python's user script directory to your
-shell path:
+If the `agentsecure` executable is not on your `PATH`, use the module form:
 
 ```bash
-export PATH="$(python3 -m site --user-base)/bin:$PATH"
-agentsecure demo
+python3 -m agentsecure start --client claude
 ```
 
-You do not need a virtual environment to run AgentSecure. Use one only if you
-want the install isolated to this project:
+You do not need a virtual environment to run AgentSecure. If you want an
+isolated project-local install, you can still use one:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install agentsecure
-agentsecure demo
 ```
-
-For the easiest secret-safe API calls, add the AgentSecure MCP server to your agent client and run the agent normally:
-
-```bash
-agentsecure start
-```
-
-The guided start command initializes the project, offers to import `.env` secrets into the local vault, writes AgentSecure instructions into `AGENTS.md`, prints the MCP setup command, and ends with a ready summary.
-
-Manual setup is still available:
-
-```bash
-agentsecure mcp install codex
-agentsecure mcp install claude
-```
-
-Those commands print the local MCP setup for this project. For Codex, AgentSecure prints a `codex mcp add ...` command. The MCP server exposes safe tools that can describe policy and send approved credentialed HTTP requests without showing the agent real secret values.
 
 ## AI Coding Agent Security Scanner
 
