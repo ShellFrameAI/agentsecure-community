@@ -15,6 +15,7 @@ def run_agentsecure(
     args: List[str],
     cwd: str,
     env: Optional[Dict[str, str]] = None,
+    stdin_text: Optional[str] = None,
     timeout: int = 15,
 ) -> subprocess.CompletedProcess:
     command = [sys.executable, "-m", "agentsecure"] + args
@@ -26,6 +27,7 @@ def run_agentsecure(
         command,
         cwd=cwd,
         env=merged_env,
+        input=stdin_text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         universal_newlines=True,
