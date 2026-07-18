@@ -96,6 +96,40 @@ class ProductServiceTest(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_doctor_reports_legacy_plaintext_dotenv_backups(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            cwd = os.getcwd()
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                os.chdir(project_dir)
+                service = ProductService("agentsecure.json", CompositeSecretScanner([]))
+                service.init_project()
+                from agentsecure.core.dotenv_backups import dotenv_backup_directory
+
+                backup_dir = dotenv_backup_directory("agentsecure.json")
+                os.makedirs(backup_dir)
+                with open(os.path.join(backup_dir, ".env.20260101010101.bak"), "w") as handle:
+                    handle.write("API_KEY=legacy-plaintext-secret\n")
+
+                result = service.doctor()
+
+                backup_check = next(
+                    check for check in result["checks"] if check["name"] == "dotenv_backups_encrypted"
+                )
+                self.assertFalse(backup_check["ok"])
+                self.assertIn("1 legacy plaintext", backup_check["detail"])
+                self.assertNotIn("legacy-plaintext-secret", json.dumps(result))
+            finally:
+                os.chdir(cwd)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
 
 if __name__ == "__main__":
     unittest.main()

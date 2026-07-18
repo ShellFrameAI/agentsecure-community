@@ -12,12 +12,17 @@ def agentsecure_home() -> str:
 
 def encrypted_secret_store_for_vault() -> SecretStore:
     base = os.path.join(agentsecure_home(), "vault")
-    key_provider = LocalDeviceKeyProvider(os.path.join(base, "device.key"))
-    cipher = LocalSecretCipher(key_provider)
+    cipher = local_cipher_for_vault()
     return EncryptedLocalSecretStore(
         os.path.join(base, "secrets.enc.json"),
         cipher,
     )
+
+
+def local_cipher_for_vault() -> LocalSecretCipher:
+    base = os.path.join(agentsecure_home(), "vault")
+    key_provider = LocalDeviceKeyProvider(os.path.join(base, "device.key"))
+    return LocalSecretCipher(key_provider)
 
 
 def encrypted_secret_store_for_project(project_root: str = ".") -> SecretStore:

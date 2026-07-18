@@ -40,6 +40,8 @@ class SecretAliasesCliTest(unittest.TestCase):
                 self.assertEqual("local_vault", result["real_secrets_stored"])
                 self.assertTrue(os.path.exists(result["backup"]))
                 self.assertTrue(result["backup"].startswith(home_dir))
+                self.assertTrue(result["backup_encrypted"])
+                self.assertTrue(result["backup"].endswith(".asbak"))
 
                 with open(env_path, "r") as handle:
                     dotenv_text = handle.read()
@@ -63,14 +65,16 @@ class SecretAliasesCliTest(unittest.TestCase):
 
                 with open(result["backup"], "r") as handle:
                     backup_text = handle.read()
-                self.assertIn(real_url, backup_text)
-                self.assertIn(real_key, backup_text)
+                self.assertNotIn(real_url, backup_text)
+                self.assertNotIn(real_key, backup_text)
+                self.assertIn("agentsecure-dotenv-backup", backup_text)
 
                 restore_output = StringIO()
                 with redirect_stdout(restore_output):
                     self.assertEqual(0, main(["--config", config_path, "secrets", "restore", ".env"]))
                 restore_result = json.loads(restore_output.getvalue())
                 self.assertTrue(restore_result["restored"])
+                self.assertTrue(restore_result["backup_encrypted"])
                 self.assertEqual(result["backup"], restore_result["backup"])
                 with open(env_path, "r") as handle:
                     restored_text = handle.read()
@@ -304,6 +308,111 @@ class SecretAliasesCliTest(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
                 os.environ.pop("TEST_REAL_DATABASE_URL", None)
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_backup_status_and_dry_run_expose_no_secret_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            backup_dir = os.path.join(home_dir, "backups")
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                from agentsecure.core.dotenv_backups import dotenv_backup_directory
+
+                project_backup_dir = dotenv_backup_directory(config_path)
+                os.makedirs(project_backup_dir)
+                legacy_path = os.path.join(project_backup_dir, ".env.20260101010101.bak")
+                with open(legacy_path, "w") as handle:
+                    handle.write("API_KEY=legacy-secret-must-not-print\n")
+
+                status_output = StringIO()
+                with redirect_stdout(status_output):
+                    self.assertEqual(1, main(["--config", config_path, "secrets", "backups", "status"]))
+                status_text = status_output.getvalue()
+                self.assertNotIn("legacy-secret-must-not-print", status_text)
+                self.assertIn('"legacy_plaintext_count": 1', status_text)
+
+                dry_run_output = StringIO()
+                with redirect_stdout(dry_run_output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "secrets", "backups", "migrate", "--dry-run"]),
+                    )
+                self.assertTrue(os.path.exists(legacy_path))
+                self.assertNotIn("legacy-secret-must-not-print", dry_run_output.getvalue())
+            finally:
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_backup_migration_requires_confirmation_and_can_be_cancelled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                from agentsecure.core.dotenv_backups import dotenv_backup_directory
+
+                project_backup_dir = dotenv_backup_directory(config_path)
+                os.makedirs(project_backup_dir)
+                legacy_path = os.path.join(project_backup_dir, ".env.20260101010101.bak")
+                with open(legacy_path, "w") as handle:
+                    handle.write("API_KEY=legacy-secret\n")
+
+                output = StringIO()
+                with patch("builtins.input", return_value="n"):
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            1,
+                            main(["--config", config_path, "secrets", "backups", "migrate"]),
+                        )
+                self.assertIn("cancelled", output.getvalue())
+                self.assertTrue(os.path.exists(legacy_path))
+            finally:
+                if old_home is None:
+                    os.environ.pop("AGENTSECURE_HOME", None)
+                else:
+                    os.environ["AGENTSECURE_HOME"] = old_home
+
+    def test_backup_migration_yes_encrypts_and_removes_legacy_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_dir = os.path.join(temp_dir, "project")
+            home_dir = os.path.join(temp_dir, "home")
+            os.makedirs(project_dir)
+            config_path = os.path.join(project_dir, "agentsecure.json")
+            old_home = os.environ.get("AGENTSECURE_HOME")
+            os.environ["AGENTSECURE_HOME"] = home_dir
+            try:
+                from agentsecure.core.dotenv_backups import dotenv_backup_directory
+
+                project_backup_dir = dotenv_backup_directory(config_path)
+                os.makedirs(project_backup_dir)
+                legacy_path = os.path.join(project_backup_dir, ".env.20260101010101.bak")
+                with open(legacy_path, "w") as handle:
+                    handle.write("API_KEY=legacy-secret\n")
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(
+                        0,
+                        main(["--config", config_path, "secrets", "backups", "migrate", "--yes"]),
+                    )
+                result = json.loads(output.getvalue())
+                self.assertFalse(os.path.exists(legacy_path))
+                self.assertEqual(1, len(result["migrated"]))
+                with open(result["migrated"][0], "r") as handle:
+                    self.assertNotIn("legacy-secret", handle.read())
+            finally:
                 if old_home is None:
                     os.environ.pop("AGENTSECURE_HOME", None)
                 else:

@@ -154,7 +154,7 @@ def _restore_dotenv_during_uninstall(args: argparse.Namespace) -> int:
 
     should_restore = bool(getattr(args, "restore_dotenv", False))
     if not should_restore and not args.yes:
-        print("AgentSecure can restore %s from this private backup:" % getattr(args, "dotenv", ".env"))
+        print("AgentSecure can restore %s from this encrypted recovery backup:" % getattr(args, "dotenv", ".env"))
         print("  %s" % backup_path)
         answer = input("Restore dotenv before uninstall? [y/N]: ").strip().lower()
         should_restore = answer in ("y", "yes")
