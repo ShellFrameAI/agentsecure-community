@@ -83,7 +83,15 @@ from agentsecure.core.container import Container
 from agentsecure.core.key_service import KeyManagementError, KeyManagementService
 from agentsecure.core.models import AgentSecureConfig, DiscoveredSecret, ProcessRequest, SecretBinding, SecretReplacement
 from agentsecure.core.provider_proxy import configured_provider_base_url, provider_base_local_path
-from agentsecure.core.dotenv_backups import backup_dotenv_to_vault, latest_dotenv_backup, restore_dotenv_backup
+from agentsecure.core.dotenv_backups import (
+    DotenvBackupError,
+    backup_dotenv_to_vault,
+    dotenv_backup_status,
+    is_encrypted_dotenv_backup,
+    latest_dotenv_backup,
+    migrate_legacy_dotenv_backups,
+    restore_dotenv_backup,
+)
 from agentsecure.core.product import ProductService
 from agentsecure.core.runtime_bindings import ENV_RUNTIME_BINDINGS, serialize_runtime_bindings
 from agentsecure.core.secret_aliases import (
@@ -323,6 +331,12 @@ def build_parser() -> argparse.ArgumentParser:
     restore_secret_parser.add_argument("path", nargs="?", default=".env", help="Dotenv file to restore, default .env")
     restore_secret_parser.add_argument("--backup", default="", help="Specific backup file to restore instead of the latest backup")
     restore_secret_parser.add_argument("--dry-run", action="store_true", help="Show which backup would be restored")
+    backups_parser = secrets_subparsers.add_parser("backups", help="Inspect or migrate dotenv recovery backups")
+    backups_subparsers = backups_parser.add_subparsers(dest="backups_command")
+    backups_subparsers.add_parser("status", help="Show encrypted and legacy plaintext backup counts")
+    migrate_backups_parser = backups_subparsers.add_parser("migrate", help="Encrypt legacy plaintext backups and remove verified originals")
+    migrate_backups_parser.add_argument("--dry-run", action="store_true", help="Show backups that would be migrated without writing")
+    migrate_backups_parser.add_argument("--yes", action="store_true", help="Confirm migration without prompting")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -819,7 +833,7 @@ def start_onboarding(args: argparse.Namespace) -> int:
                 message += " and rewrote %s with safe placeholders" % args.dotenv
             _start_print(args, message)
             if imported.get("backup"):
-                _start_print(args, "Backup: %s" % imported.get("backup"))
+                _start_print(args, "Encrypted backup: %s" % imported.get("backup"))
         else:
             summary["steps"].append({"name": "secrets", "status": "not_imported"})
             _start_print(args, "Secrets: not imported")
@@ -1633,6 +1647,8 @@ def handle_secret_aliases(args: argparse.Namespace) -> int:
         return import_secret_aliases(args)
     if args.secrets_command == "restore":
         return restore_dotenv_from_backup(args)
+    if args.secrets_command == "backups":
+        return handle_dotenv_backups(args)
     sys.stderr.write("agentsecure: missing secrets subcommand\n")
     return 2
 
@@ -1770,6 +1786,7 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
                     "dotenv": args.path,
                     "imported": imports,
                     "would_rewrite_dotenv": not args.keep_file,
+                    "would_create_encrypted_backup": not args.keep_file and not args.no_backup,
                     "dry_run": True,
                 },
                 indent=2,
@@ -1803,7 +1820,7 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
         if not args.no_backup:
             try:
                 backup_path = backup_dotenv_to_vault(dotenv_path, args.config)
-            except OSError as exc:
+            except (OSError, DotenvBackupError) as exc:
                 sys.stderr.write("agentsecure: failed to back up dotenv file: %s\n" % exc)
                 return 1
         try:
@@ -1817,6 +1834,7 @@ def import_secret_aliases(args: argparse.Namespace) -> int:
             {
                 "dotenv": args.path,
                 "backup": backup_path,
+                "backup_encrypted": bool(backup_path),
                 "rewritten": not args.keep_file,
                 "imported": [
                     {
@@ -1845,12 +1863,21 @@ def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
     if not os.path.exists(backup_path):
         sys.stderr.write("agentsecure: backup file not found: %s\n" % backup_path)
         return 2
+    backup_encrypted = is_encrypted_dotenv_backup(backup_path)
+    if backup_path.endswith(".asbak") and not backup_encrypted:
+        sys.stderr.write("agentsecure: encrypted backup envelope is invalid: %s\n" % backup_path)
+        return 1
+    if not backup_encrypted and not backup_path.endswith(".bak"):
+        sys.stderr.write("agentsecure: unsupported backup file type: %s\n" % backup_path)
+        return 2
     if args.dry_run:
         print(
             json.dumps(
                 {
                     "dotenv": args.path,
                     "backup": backup_path,
+                    "backup_encrypted": backup_encrypted,
+                    "backup_legacy_plaintext": not backup_encrypted,
                     "would_restore": True,
                     "dry_run": True,
                 },
@@ -1861,7 +1888,7 @@ def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
         return 0
     try:
         restore_dotenv_backup(dotenv_path, backup_path)
-    except OSError as exc:
+    except (OSError, DotenvBackupError) as exc:
         sys.stderr.write("agentsecure: failed to restore dotenv file: %s\n" % exc)
         return 1
     print(
@@ -1869,12 +1896,59 @@ def restore_dotenv_from_backup(args: argparse.Namespace) -> int:
             {
                 "dotenv": args.path,
                 "backup": backup_path,
+                "backup_encrypted": backup_encrypted,
                 "restored": True,
             },
             indent=2,
             sort_keys=True,
         )
     )
+    return 0
+
+
+def handle_dotenv_backups(args: argparse.Namespace) -> int:
+    command = getattr(args, "backups_command", "")
+    if command in ("", "status"):
+        status = dotenv_backup_status(args.config)
+        print(json.dumps(status, indent=2, sort_keys=True))
+        return 0 if status["ok"] else 1
+    if command != "migrate":
+        sys.stderr.write("agentsecure: missing backups subcommand\n")
+        return 2
+    status = dotenv_backup_status(args.config)
+    count = status["legacy_plaintext_count"]
+    if args.dry_run:
+        result = migrate_legacy_dotenv_backups(args.config, dry_run=True)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    if count == 0:
+        print(
+            json.dumps(
+                {
+                    "dry_run": False,
+                    "legacy_plaintext_count": 0,
+                    "migrated": [],
+                    "message": "No legacy plaintext backups found",
+                    "removed_plaintext": [],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    if not args.yes:
+        print("AgentSecure found %s legacy plaintext dotenv backup(s)." % count)
+        print("Each backup will be encrypted and verified before its plaintext original is removed.")
+        answer = input("Continue? [y/N]: ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Backup migration cancelled.")
+            return 1
+    try:
+        result = migrate_legacy_dotenv_backups(args.config, dry_run=False)
+    except (OSError, DotenvBackupError) as exc:
+        sys.stderr.write("agentsecure: failed to migrate dotenv backups: %s\n" % exc)
+        return 1
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 

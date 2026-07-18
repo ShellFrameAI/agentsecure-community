@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from agentsecure.core.agentsecure_md import AGENTSECURE_MD, agentsecure_md_status, ensure_agentsecure_md
 from agentsecure.core.config import JsonConfigWriter
 from agentsecure.core.config_profiles import profile_metadata
+from agentsecure.core.dotenv_backups import dotenv_backup_status
 from agentsecure.core.time import now_seconds
 from agentsecure.crypto.key_provider import LocalDeviceKeyProvider
 from agentsecure.discovery.scanner import SecretScanner
@@ -143,6 +144,24 @@ class ProductService:
                 "agentsecure_dir_ignored",
                 os.path.exists(os.path.join(".agentsecure", ".gitignore")),
                 ".agentsecure/.gitignore protects local secrets from git",
+            )
+        )
+        backup_status = dotenv_backup_status(self.config_path)
+        legacy_backup_count = backup_status["legacy_plaintext_count"]
+        invalid_backup_count = backup_status["invalid_encrypted_count"]
+        backup_detail = "%s encrypted dotenv backup(s); no plaintext backups found" % backup_status["encrypted_count"]
+        if legacy_backup_count:
+            backup_detail = (
+                "%s legacy plaintext dotenv backup(s) found; run "
+                "`agentsecure secrets backups migrate --dry-run` and then migrate"
+            ) % legacy_backup_count
+        elif invalid_backup_count:
+            backup_detail = "%s encrypted dotenv backup(s) have an invalid envelope" % invalid_backup_count
+        checks.append(
+            self._check(
+                "dotenv_backups_encrypted",
+                legacy_backup_count == 0 and invalid_backup_count == 0,
+                backup_detail,
             )
         )
         config = self._load_config()

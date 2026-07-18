@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Encrypt new dotenv recovery backups instead of copying plaintext secrets under `~/.agentsecure/backups/`.
+- Added backup status, dry-run migration, verified legacy-backup migration, and encrypted/legacy restore compatibility.
+- Added doctor reporting and explicit documentation for the current same-OS-user local vault threat model.
+
 ## 0.1.22 - 2026-07-14
 
 - Added an end-to-end secret canary release gate covering guided setup, protected agent execution, approved MCP credential use, response redaction, and audit-log safety.

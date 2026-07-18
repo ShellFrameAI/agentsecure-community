@@ -135,7 +135,7 @@ Or use the guided setup:
 agentsecure start --approved-host https://api.example.com
 ```
 
-`secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes a private backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders.
+`secrets import` is the easiest migration path. It scans the dotenv file, stores discovered real secret values in the local vault, assigns those aliases to the current project, writes an encrypted recovery backup under `~/.agentsecure/backups/`, and replaces the values in `.env` with non-secret `AGENTSECURE_ALIAS_...` placeholders. Backup files use the `.asbak` suffix and contain no plaintext dotenv values.
 
 Use `--dry-run` to preview the import, or `--keep-file` if you want to store aliases without rewriting `.env`.
 
@@ -144,6 +144,16 @@ To undo the rewrite and bring the original `.env` back from the latest private b
 ```bash
 agentsecure secrets restore .env
 ```
+
+Releases before this change created owner-only but plaintext `.bak` files. Inspect and safely migrate backups for the current project with:
+
+```bash
+agentsecure secrets backups status
+agentsecure secrets backups migrate --dry-run
+agentsecure secrets backups migrate
+```
+
+Migration encrypts and verifies each backup before asking the operating system to remove its plaintext source. The current release can still restore legacy `.bak` backups, so existing recovery data remains usable during the upgrade.
 
 During uninstall, AgentSecure offers the same restore before it removes project state:
 
@@ -173,6 +183,13 @@ agentsecure run -- claude
 What this does:
 
 - The real value is stored locally under `~/.agentsecure/vault/`.
+- Dotenv recovery backups are encrypted and stored under `~/.agentsecure/backups/`.
+
+### Local vault threat model
+
+The current Community vault encrypts secret values at rest, but its local device key is stored under the same `~/.agentsecure/vault/` directory with owner-only filesystem permissions. This prevents plaintext disclosure from the encrypted data file alone, but it is not isolation from a hostile process with unrestricted shell access as the same OS user. The MCP broker keeps raw credentials out of normal agent context and sends approved credential-bearing requests itself; command guidance and command-guard are not a hard sandbox.
+
+Use development-only, scoped credentials and run untrusted agents in an OS sandbox or separate execution identity. Keychain/user-presence-backed key isolation is tracked as a separate hardening layer rather than implied by the current local-file vault.
 - `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
 - For MCP calls, AgentSecure creates a short-lived fake token such as `virt_database_...`.
 - The MCP request tool swaps placeholders for real secrets only when the destination host and port are allowed by network policy.
