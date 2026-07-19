@@ -7,6 +7,7 @@
 - Added doctor reporting and explicit documentation for the current same-OS-user local vault threat model.
 - Added AES-256-GCM v2 vault records for new vaults plus explicit status, verification, migration, recovery snapshots, and v1 rollback for older releases.
 - Existing v1 vaults remain unchanged until confirmed migration; rollback re-encrypts the current record set so post-upgrade secrets are preserved.
+- Added passphrase-wrapped vault keys with trusted-terminal prompting, lazy unlock, verified key-provider migration, interrupted-state recovery, and a tested raw-key rollback path for AgentSecure 0.1.22.
 
 ## 0.1.22 - 2026-07-14
 

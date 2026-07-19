@@ -35,10 +35,10 @@ Report privately by emailing the project maintainer or opening a private securit
 
 Command-guard mode masks common read/search command output. It is not a hard sandbox and can be bypassed by unwrapped tools, absolute binary paths, or custom code that reads files directly.
 
-Vault secret values are encrypted at rest, but the Community local-file encryption key is currently stored under the same OS user's AgentSecure home. Owner-only permissions protect against other non-privileged users, not a hostile process with unrestricted access as that owner. Do not treat the local-file vault as a sandbox boundary against the coding agent itself.
+Vault secret values are encrypted at rest. Existing installations begin with a local-file encryption key under the same OS user's AgentSecure home for compatibility. `agentsecure vault key protect` can replace that raw key with a passphrase-wrapped key after authenticating the vault and backups. This protects copied at-rest files, but it does not isolate an unlocked process or an unsigned prompt from a hostile process with unrestricted access as the same OS user. Do not treat either provider as a sandbox boundary against the coding agent itself.
 
 Current dotenv recovery backups use an encrypted `.asbak` format. Older AgentSecure releases created plaintext `.bak` recovery files with owner-only permissions. `agentsecure doctor` reports those files, and `agentsecure secrets backups migrate` encrypts and verifies them before removing the plaintext originals.
 
-New vaults use AES-256-GCM v2 records. Existing v1 vaults require an explicit, verified `agentsecure vault migrate`; package installation alone does not mutate stored credentials. Use `agentsecure vault rollback --to-format v1` before installing a release that cannot read v2. Vault-format upgrades do not by themselves isolate the local-file device key from a hostile same-user process.
+New vaults use AES-256-GCM v2 records. Existing v1 vaults require an explicit, verified `agentsecure vault migrate`; package installation alone does not mutate stored credentials. Before installing 0.1.22, use both `agentsecure vault rollback --to-format v1` and `agentsecure vault key unprotect` while the newer release is still installed. Vault-format and key-provider upgrades do not create a hard same-user process boundary.
 
 For stronger isolation, use workspace copy mode and operating-system sandboxing.

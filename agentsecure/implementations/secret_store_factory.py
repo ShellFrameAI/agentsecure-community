@@ -4,8 +4,12 @@ import json
 from agentsecure.crypto.aead_cipher import AeadSecretCipher, aead_available
 from agentsecure.crypto.cipher import LocalSecretCipher
 from agentsecure.crypto.key_provider import LocalDeviceKeyProvider
+from agentsecure.crypto.wrapped_key_provider import WrappedDeviceKeyProvider
 from agentsecure.implementations.encrypted_secret_store import EncryptedLocalSecretStore
 from agentsecure.interfaces.key_store import SecretStore
+
+
+_VAULT_KEY_PROVIDER_CACHE = {}
 
 
 def agentsecure_home() -> str:
@@ -41,22 +45,82 @@ def encrypted_secret_store_for_vault() -> SecretStore:
 
 
 def local_cipher_for_vault() -> LocalSecretCipher:
-    base = os.path.join(agentsecure_home(), "vault")
-    key_provider = LocalDeviceKeyProvider(os.path.join(base, "device.key"))
-    return LocalSecretCipher(key_provider)
+    return LocalSecretCipher(vault_key_provider(create=True))
 
 
 def local_ciphers_for_vault(create: bool = True) -> dict:
-    base = os.path.join(agentsecure_home(), "vault")
-    key_path = os.path.join(base, "device.key")
-    if not create:
-        if os.path.islink(key_path) or not os.path.isfile(key_path):
-            raise RuntimeError("vault device key is missing or is not a regular file")
-    key_provider = LocalDeviceKeyProvider(key_path)
+    key_provider = vault_key_provider(create=create)
     ciphers = {"agentsecure-local-v1": LocalSecretCipher(key_provider)}
     if aead_available():
         ciphers[AeadSecretCipher.NAME] = AeadSecretCipher(key_provider)
     return ciphers
+
+
+def vault_key_provider(create: bool = True):
+    base = os.path.join(agentsecure_home(), "vault")
+    raw_path = os.path.join(base, "device.key")
+    wrapped_path = os.path.join(base, "device.key.wrap.json")
+    raw_exists = os.path.isfile(raw_path) and not os.path.islink(raw_path)
+    wrapped_exists = os.path.isfile(wrapped_path) and not os.path.islink(wrapped_path)
+    if os.path.lexists(raw_path) and not raw_exists:
+        raise RuntimeError("vault device key must be a regular, non-symbolic-link file")
+    if os.path.lexists(wrapped_path) and not wrapped_exists:
+        raise RuntimeError("wrapped vault key must be a regular, non-symbolic-link file")
+    if raw_exists and wrapped_exists:
+        raise RuntimeError(
+            "vault has both raw and wrapped device keys; run `agentsecure vault key status` before continuing"
+        )
+    if wrapped_exists:
+        provider_type = "passphrase_wrapped"
+        provider_path = wrapped_path
+    elif raw_exists or create:
+        provider_type = "local_file"
+        provider_path = raw_path
+    else:
+        raise RuntimeError("vault device key is missing")
+    cache_key = (base, provider_type, provider_path)
+    provider = _VAULT_KEY_PROVIDER_CACHE.get(cache_key)
+    if provider is None:
+        if provider_type == "passphrase_wrapped":
+            provider = WrappedDeviceKeyProvider(provider_path)
+        else:
+            provider = LocalDeviceKeyProvider(provider_path)
+        _VAULT_KEY_PROVIDER_CACHE.clear()
+        _VAULT_KEY_PROVIDER_CACHE[cache_key] = provider
+    return provider
+
+
+def vault_key_provider_status() -> dict:
+    base = os.path.join(agentsecure_home(), "vault")
+    raw_path = os.path.join(base, "device.key")
+    wrapped_path = os.path.join(base, "device.key.wrap.json")
+    raw_exists = os.path.isfile(raw_path) and not os.path.islink(raw_path)
+    wrapped_exists = os.path.isfile(wrapped_path) and not os.path.islink(wrapped_path)
+    raw_invalid = os.path.lexists(raw_path) and not raw_exists
+    wrapped_invalid = os.path.lexists(wrapped_path) and not wrapped_exists
+    if raw_invalid or wrapped_invalid:
+        provider = "invalid"
+    elif raw_exists and wrapped_exists:
+        provider = "ambiguous"
+    elif wrapped_exists:
+        provider = "passphrase_wrapped"
+    elif raw_exists:
+        provider = "local_file"
+    else:
+        provider = "missing"
+    return {
+        "provider": provider,
+        "raw_key_exists": raw_exists,
+        "raw_key_invalid": raw_invalid,
+        "raw_key_path": raw_path,
+        "wrapped_key_exists": wrapped_exists,
+        "wrapped_key_invalid": wrapped_invalid,
+        "wrapped_key_path": wrapped_path,
+    }
+
+
+def clear_vault_key_provider_cache() -> None:
+    _VAULT_KEY_PROVIDER_CACHE.clear()
 
 
 def detected_vault_format(store_path: str = "") -> int:

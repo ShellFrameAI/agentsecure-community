@@ -97,11 +97,12 @@ class VaultMigrationService:
         data = self._load_store(required=False)
         manifest = self._load_json(self.manifest_path, required=False)
         lock_status = _migration_lock_status(self.lock_path)
+        key_provider = self._key_provider_status()
         return {
             "cipher": VAULT_CIPHERS.get(format_version, "unknown"),
             "format_version": format_version,
-            "key_exists": os.path.isfile(self.key_path) and not os.path.islink(self.key_path),
-            "key_provider": "local_file",
+            "key_exists": key_provider in ("local_file", "passphrase_wrapped"),
+            "key_provider": key_provider,
             "manifest": manifest,
             "migration_lock": lock_status,
             "migration_locked": lock_status["exists"],
@@ -328,17 +329,35 @@ class VaultMigrationService:
         records: int,
         recovery_path: str,
     ) -> None:
-        manifest = {
+        previous_manifest = self._load_json(self.manifest_path, required=False)
+        manifest = dict(previous_manifest)
+        manifest.update({
             "cipher": VAULT_CIPHERS[target_format],
             "format_version": target_format,
-            "key_provider": "local_file",
+            "key_provider": self._key_provider_status(),
             "last_operation": operation,
             "migrated_from": source_format,
             "records": records,
             "recovery_snapshot": os.path.relpath(recovery_path, self.vault_dir),
             "updated_at": int(time.time()),
-        }
+        })
         _atomic_write_json(self.manifest_path, manifest)
+
+    def _key_provider_status(self) -> str:
+        wrapped_path = os.path.join(self.vault_dir, "device.key.wrap.json")
+        raw_regular = os.path.isfile(self.key_path) and not os.path.islink(self.key_path)
+        wrapped_regular = os.path.isfile(wrapped_path) and not os.path.islink(wrapped_path)
+        raw_invalid = os.path.lexists(self.key_path) and not raw_regular
+        wrapped_invalid = os.path.lexists(wrapped_path) and not wrapped_regular
+        if raw_invalid or wrapped_invalid:
+            return "invalid"
+        if raw_regular and wrapped_regular:
+            return "ambiguous"
+        if wrapped_regular:
+            return "passphrase_wrapped"
+        if raw_regular:
+            return "local_file"
+        return "missing"
 
     def _result(
         self,
