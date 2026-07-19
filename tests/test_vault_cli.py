@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from agentsecure.cli.main import main
 from agentsecure.implementations.secret_store_factory import detected_vault_format
+from agentsecure.implementations.secret_store_factory import clear_vault_key_provider_cache
 
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -34,8 +35,10 @@ class VaultCliTest(unittest.TestCase):
         self.store_path = os.path.join(vault_dir, "secrets.enc.json")
         self.old_home = os.environ.get("AGENTSECURE_HOME")
         os.environ["AGENTSECURE_HOME"] = self.home_dir
+        clear_vault_key_provider_cache()
 
     def tearDown(self):
+        clear_vault_key_provider_cache()
         if self.old_home is None:
             os.environ.pop("AGENTSECURE_HOME", None)
         else:
@@ -107,6 +110,90 @@ class VaultCliTest(unittest.TestCase):
         self.assertIn("vault verify failed", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
         self.assertNotIn("dummy-v1-api-value", stderr.getvalue())
+
+    def test_key_status_and_dry_run_do_not_unlock_or_write(self):
+        before = self._key_snapshot()
+        status_output = StringIO()
+        dry_run_output = StringIO()
+        with patch(
+            "agentsecure.cli.main.read_passphrase_from_trusted_tty",
+            side_effect=AssertionError("must not unlock"),
+        ):
+            with redirect_stdout(status_output):
+                self.assertEqual(0, main(["vault", "key", "status"]))
+            with redirect_stdout(dry_run_output):
+                self.assertEqual(0, main(["vault", "key", "protect", "--dry-run"]))
+        self.assertEqual("local_file", json.loads(status_output.getvalue())["provider"])
+        self.assertEqual("planned", json.loads(dry_run_output.getvalue())["status"])
+        self.assertEqual(before, self._key_snapshot())
+
+    def test_key_protect_can_be_cancelled_before_passphrase_prompt(self):
+        output = StringIO()
+        with patch("builtins.input", return_value="n"), patch(
+            "agentsecure.cli.main.read_passphrase_from_trusted_tty",
+            side_effect=AssertionError("must not prompt after cancellation"),
+        ):
+            with redirect_stdout(output):
+                self.assertEqual(1, main(["vault", "key", "protect"]))
+        self.assertIn("cancelled", output.getvalue())
+        self.assertTrue(os.path.exists(os.path.join(self.home_dir, "vault", "device.key")))
+
+    def test_key_protect_and_unprotect_prompt_only_through_trusted_reader(self):
+        outputs = []
+        with patch(
+            "agentsecure.cli.main.read_passphrase_from_trusted_tty",
+            side_effect=["correct horse battery staple", "correct horse battery staple"],
+        ) as reader:
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["vault", "key", "protect", "--yes"]))
+            outputs.append(output.getvalue())
+            self.assertEqual(2, reader.call_count)
+        wrapped_path = os.path.join(self.home_dir, "vault", "device.key.wrap.json")
+        self.assertTrue(os.path.exists(wrapped_path))
+
+        with patch(
+            "agentsecure.cli.main.read_passphrase_from_trusted_tty",
+            return_value="correct horse battery staple",
+        ) as reader:
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(0, main(["vault", "key", "unprotect", "--yes"]))
+            outputs.append(output.getvalue())
+            self.assertEqual(1, reader.call_count)
+        self.assertFalse(os.path.exists(wrapped_path))
+        combined = "".join(outputs)
+        self.assertNotIn("correct horse battery staple", combined)
+        self.assertNotIn("dummy-v1-api-value", combined)
+
+    def test_wrong_key_passphrase_is_concise_and_secret_free(self):
+        with patch(
+            "agentsecure.cli.main.read_passphrase_from_trusted_tty",
+            side_effect=["correct horse battery staple", "correct horse battery staple"],
+        ):
+            with redirect_stdout(StringIO()):
+                self.assertEqual(0, main(["vault", "key", "protect", "--yes"]))
+        stdout = StringIO()
+        stderr = StringIO()
+        with patch("agentsecure.cli.main.read_passphrase_from_trusted_tty", return_value="wrong passphrase"):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                self.assertEqual(1, main(["vault", "key", "unprotect", "--yes"]))
+        self.assertEqual("", stdout.getvalue())
+        self.assertIn("vault key unprotect failed", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+        self.assertNotIn("dummy-v1-api-value", stderr.getvalue())
+
+    def _key_snapshot(self):
+        snapshot = {}
+        vault_dir = os.path.join(self.home_dir, "vault")
+        for name in ("device.key", "device.key.wrap.json", "manifest.json"):
+            path = os.path.join(vault_dir, name)
+            if os.path.exists(path):
+                with open(path, "rb") as handle:
+                    snapshot[name] = handle.read()
+            else:
+                snapshot[name] = None
+        return snapshot
 
 
 if __name__ == "__main__":

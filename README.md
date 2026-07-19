@@ -187,9 +187,21 @@ What this does:
 
 ### Local vault threat model
 
-The current Community vault encrypts secret values at rest, but its local device key is stored under the same `~/.agentsecure/vault/` directory with owner-only filesystem permissions. This prevents plaintext disclosure from the encrypted data file alone, but it is not isolation from a hostile process with unrestricted shell access as the same OS user. The MCP broker keeps raw credentials out of normal agent context and sends approved credential-bearing requests itself; command guidance and command-guard are not a hard sandbox.
+The vault encrypts secret values at rest. Existing installations initially keep the device key in `~/.agentsecure/vault/device.key` with owner-only permissions for backward compatibility. You can replace that raw file with an AES-256-GCM passphrase-wrapped key after inspecting the plan:
 
-Use development-only, scoped credentials and run untrusted agents in an OS sandbox or separate execution identity. Keychain/user-presence-backed key isolation is tracked as a separate hardening layer rather than implied by the current local-file vault.
+```bash
+agentsecure vault key status
+agentsecure vault key protect --dry-run
+agentsecure vault key protect
+```
+
+The passphrase is read directly from the controlling terminal, never from command arguments, environment variables, or agent stdio. Metadata-only status commands do not unlock the vault. Secret-bearing operations prompt only when they first need the key. The migration authenticates every vault record and encrypted dotenv backup, verifies the wrapped key round trip, and only then removes `device.key`. A failed write or verification leaves the original provider usable.
+
+On a new installation, you may run `vault key protect` before adding the first secret; AgentSecure then creates the device key directly in wrapped form and never writes a raw key file.
+
+Passphrase wrapping prevents disclosure by merely reading or copying `~/.agentsecure/vault/*`; it is not isolation from a hostile process already executing as the same OS user. Such a process may inspect an unlocked process, tamper with an unsigned prompt, or capture user input. The MCP broker keeps raw credentials out of normal agent context and sends approved credential-bearing requests itself, but command guidance and command-guard are not a hard sandbox.
+
+Use development-only, scoped credentials and run untrusted agents in an OS sandbox or separate execution identity. A signed, user-presence-backed OS helper is the stronger trust boundary; passphrase wrapping is an at-rest improvement and is not presented as that boundary.
 
 ### Vault format upgrades and downgrades
 
@@ -205,11 +217,15 @@ agentsecure vault migrate
 Before downgrading the package to a version that only understands v1, convert every current record back to v1:
 
 ```bash
+agentsecure vault verify
 agentsecure vault rollback --dry-run --to-format v1
 agentsecure vault rollback --to-format v1
+agentsecure vault key unprotect --dry-run
+agentsecure vault key unprotect
+python -m pip install agentsecure==0.1.22
 ```
 
-Rollback converts the current data, including secrets added after migration. See [Vault format migration and rollback](docs/vault-migrations.md) for the transaction order, recovery behavior, and compatibility table.
+Both rollback steps must run while the newer package is installed. Record rollback converts all current data, including secrets added after migration; key unprotect restores the exact raw key file understood by 0.1.22. See [Vault format migration and rollback](docs/vault-migrations.md) for transaction order, recovery behavior, and compatibility.
 - `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
 - For MCP calls, AgentSecure creates a short-lived fake token such as `virt_database_...`.
 - The MCP request tool swaps placeholders for real secrets only when the destination host and port are allowed by network policy.

@@ -23,20 +23,27 @@ class AeadSecretCipher:
     NAME = "aes-256-gcm-v2"
 
     def __init__(self, key_provider: LocalDeviceKeyProvider) -> None:
+        self._key_provider = key_provider
+        self._cipher = None
+
+    def _cipher_or_raise(self):
+        if self._cipher is not None:
+            return self._cipher
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         except ImportError:
             raise AeadCipherUnavailable(
                 "AES-256-GCM support requires the `cryptography` package; install AgentSecure from PyPI"
             )
-        key = base64.urlsafe_b64decode(key_provider.get_or_create_key())
+        key = base64.urlsafe_b64decode(self._key_provider.get_or_create_key())
         if len(key) != 32:
             raise ValueError("AgentSecure device key must decode to 32 bytes")
         self._cipher = AESGCM(key)
+        return self._cipher
 
     def encrypt(self, plaintext: str) -> str:
         nonce = os.urandom(12)
-        ciphertext = self._cipher.encrypt(nonce, plaintext.encode("utf-8"), self.VERSION)
+        ciphertext = self._cipher_or_raise().encrypt(nonce, plaintext.encode("utf-8"), self.VERSION)
         return base64.urlsafe_b64encode(self.VERSION + nonce + ciphertext).decode("ascii")
 
     def decrypt(self, ciphertext: str) -> str:
@@ -48,5 +55,5 @@ class AeadSecretCipher:
         encrypted = raw[version_len + 12 :]
         if len(nonce) != 12 or len(encrypted) < 16:
             raise ValueError("invalid AEAD ciphertext")
-        plaintext = self._cipher.decrypt(nonce, encrypted, self.VERSION)
+        plaintext = self._cipher_or_raise().decrypt(nonce, encrypted, self.VERSION)
         return plaintext.decode("utf-8")

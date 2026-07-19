@@ -18,7 +18,8 @@ class LocalSecretCipher:
     VERSION = b"AGENTSECURE1"
 
     def __init__(self, key_provider: LocalDeviceKeyProvider) -> None:
-        self._key = base64.urlsafe_b64decode(key_provider.get_or_create_key())
+        self._key_provider = key_provider
+        self._key = None
 
     def encrypt(self, plaintext: str) -> str:
         nonce = os.urandom(16)
@@ -42,16 +43,25 @@ class LocalSecretCipher:
         return plaintext.decode("utf-8")
 
     def _keystream(self, nonce: bytes, size: int) -> bytes:
+        key = self._key_bytes()
         output = b""
         counter = 0
         while len(output) < size:
             counter_bytes = counter.to_bytes(8, "big")
-            output += hmac.new(self._key, b"stream" + nonce + counter_bytes, hashlib.sha256).digest()
+            output += hmac.new(key, b"stream" + nonce + counter_bytes, hashlib.sha256).digest()
             counter += 1
         return output[:size]
 
     def _mac(self, nonce: bytes, ciphertext: bytes) -> bytes:
-        return hmac.new(self._key, b"mac" + nonce + ciphertext, hashlib.sha256).digest()
+        return hmac.new(self._key_bytes(), b"mac" + nonce + ciphertext, hashlib.sha256).digest()
+
+    def _key_bytes(self) -> bytes:
+        if self._key is None:
+            key = base64.urlsafe_b64decode(self._key_provider.get_or_create_key())
+            if len(key) != 32:
+                raise ValueError("AgentSecure device key must decode to 32 bytes")
+            self._key = key
+        return self._key
 
     def _xor(self, left: bytes, right: bytes) -> bytes:
         return bytes(a ^ b for a, b in zip(left, right))

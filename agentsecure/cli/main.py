@@ -102,6 +102,8 @@ from agentsecure.core.secret_aliases import (
 )
 from agentsecure.core.time import DurationError
 from agentsecure.core.vault_migration import VaultMigrationError, VaultMigrationService
+from agentsecure.core.vault_key_migration import VaultKeyMigrationError, VaultKeyMigrationService
+from agentsecure.crypto.wrapped_key_provider import VaultKeyProviderError, read_passphrase_from_trusted_tty
 from agentsecure.daemon.commands import CommandExecutor, CommandPoller
 from agentsecure.daemon.policies import PolicyApplier
 from agentsecure.daemon.sessions import SessionRegistry
@@ -353,6 +355,19 @@ def build_parser() -> argparse.ArgumentParser:
     vault_rollback_parser.add_argument("--to-format", choices=["v1"], default="v1")
     vault_rollback_parser.add_argument("--dry-run", action="store_true", help="Verify and preview without writing")
     vault_rollback_parser.add_argument("--yes", action="store_true", help="Confirm rollback without prompting")
+    vault_key_parser = vault_subparsers.add_parser("key", help="Inspect, protect, or restore the vault device key")
+    vault_key_subparsers = vault_key_parser.add_subparsers(dest="vault_key_command")
+    vault_key_subparsers.add_parser("status", help="Show the key provider without unlocking the vault")
+    vault_key_protect_parser = vault_key_subparsers.add_parser(
+        "protect", help="Replace the raw device key with a passphrase-wrapped key"
+    )
+    vault_key_protect_parser.add_argument("--dry-run", action="store_true", help="Verify and preview without prompting or writing")
+    vault_key_protect_parser.add_argument("--yes", action="store_true", help="Confirm protection without prompting")
+    vault_key_unprotect_parser = vault_key_subparsers.add_parser(
+        "unprotect", help="Restore the raw device key before installing an older release"
+    )
+    vault_key_unprotect_parser.add_argument("--dry-run", action="store_true", help="Show downgrade readiness without prompting or writing")
+    vault_key_unprotect_parser.add_argument("--yes", action="store_true", help="Confirm rollback without prompting")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -1972,6 +1987,8 @@ def handle_vault(args: argparse.Namespace) -> int:
     service = VaultMigrationService()
     command = getattr(args, "vault_command", "")
     try:
+        if command == "key":
+            return handle_vault_key(args)
         if command in ("", "status"):
             print(json.dumps(service.status(), indent=2, sort_keys=True))
             return 0
@@ -2013,8 +2030,48 @@ def handle_vault(args: argparse.Namespace) -> int:
             result = service.rollback(target_format, dry_run=False)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    except (VaultMigrationError, OSError, RuntimeError, ValueError) as exc:
+    except (VaultMigrationError, VaultKeyMigrationError, VaultKeyProviderError, OSError, RuntimeError, ValueError) as exc:
         sys.stderr.write("agentsecure: vault %s failed: %s\n" % (command or "status", exc))
+        return 1
+
+
+def handle_vault_key(args: argparse.Namespace) -> int:
+    service = VaultKeyMigrationService()
+    command = getattr(args, "vault_key_command", "")
+    try:
+        if command in ("", "status"):
+            print(json.dumps(service.status(), indent=2, sort_keys=True))
+            return 0
+        if command not in ("protect", "unprotect"):
+            sys.stderr.write("agentsecure: missing vault key subcommand\n")
+            return 2
+        if args.dry_run:
+            operation = service.protect if command == "protect" else service.unprotect
+            print(json.dumps(operation(dry_run=True), indent=2, sort_keys=True))
+            return 0
+        if not args.yes:
+            if command == "protect":
+                print("AgentSecure will encrypt and verify the device key before removing its raw file.")
+                print("Future secret access will require the passphrase from your local terminal.")
+            else:
+                print("AgentSecure will restore the raw device key required by older releases.")
+                print("Run vault format rollback separately before installing AgentSecure 0.1.22.")
+            answer = input("Continue? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                print("Vault key %s cancelled." % command)
+                return 1
+        passphrase = read_passphrase_from_trusted_tty("AgentSecure vault passphrase: ")
+        if command == "protect":
+            confirmation = read_passphrase_from_trusted_tty("Confirm vault passphrase: ")
+            result = service.protect(passphrase, confirmation, dry_run=False)
+            confirmation = None
+        else:
+            result = service.unprotect(passphrase, dry_run=False)
+        passphrase = None
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    except (VaultKeyMigrationError, VaultKeyProviderError, OSError, RuntimeError, ValueError) as exc:
+        sys.stderr.write("agentsecure: vault key %s failed: %s\n" % (command or "status", exc))
         return 1
 
 
