@@ -101,6 +101,7 @@ from agentsecure.core.secret_aliases import (
     project_id_for_path,
 )
 from agentsecure.core.time import DurationError
+from agentsecure.core.vault_migration import VaultMigrationError, VaultMigrationService
 from agentsecure.daemon.commands import CommandExecutor, CommandPoller
 from agentsecure.daemon.policies import PolicyApplier
 from agentsecure.daemon.sessions import SessionRegistry
@@ -164,6 +165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return handle_keys(args)
     if args.command == "secrets":
         return handle_secret_aliases(args)
+    if args.command == "vault":
+        return handle_vault(args)
     if args.command == "discover":
         return discover_secrets(args)
     if args.command == "suggest":
@@ -337,6 +340,19 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_backups_parser = backups_subparsers.add_parser("migrate", help="Encrypt legacy plaintext backups and remove verified originals")
     migrate_backups_parser.add_argument("--dry-run", action="store_true", help="Show backups that would be migrated without writing")
     migrate_backups_parser.add_argument("--yes", action="store_true", help="Confirm migration without prompting")
+
+    vault_parser = subparsers.add_parser("vault", help="Inspect, verify, migrate, or roll back the local vault format")
+    vault_subparsers = vault_parser.add_subparsers(dest="vault_command")
+    vault_subparsers.add_parser("status", help="Show vault format and migration state without secret values")
+    vault_subparsers.add_parser("verify", help="Authenticate every vault record and validate alias references")
+    vault_migrate_parser = vault_subparsers.add_parser("migrate", help="Migrate the vault to the current format")
+    vault_migrate_parser.add_argument("--to-format", choices=["v2"], default="v2")
+    vault_migrate_parser.add_argument("--dry-run", action="store_true", help="Verify and preview without writing")
+    vault_migrate_parser.add_argument("--yes", action="store_true", help="Confirm migration without prompting")
+    vault_rollback_parser = vault_subparsers.add_parser("rollback", help="Convert the current vault for an older AgentSecure release")
+    vault_rollback_parser.add_argument("--to-format", choices=["v1"], default="v1")
+    vault_rollback_parser.add_argument("--dry-run", action="store_true", help="Verify and preview without writing")
+    vault_rollback_parser.add_argument("--yes", action="store_true", help="Confirm rollback without prompting")
 
     subparsers.add_parser("discover", help="Discover likely local secrets")
     subparsers.add_parser("suggest", help="Suggest env and network policy for discovered secrets")
@@ -1950,6 +1966,56 @@ def handle_dotenv_backups(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
+
+
+def handle_vault(args: argparse.Namespace) -> int:
+    service = VaultMigrationService()
+    command = getattr(args, "vault_command", "")
+    try:
+        if command in ("", "status"):
+            print(json.dumps(service.status(), indent=2, sort_keys=True))
+            return 0
+        if command == "verify":
+            result = service.verify()
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["ok"] else 1
+        if command not in ("migrate", "rollback"):
+            sys.stderr.write("agentsecure: missing vault subcommand\n")
+            return 2
+        target_format = 2 if args.to_format == "v2" else 1
+        if command == "migrate":
+            plan = service.migrate(target_format, dry_run=True)
+        else:
+            plan = service.rollback(target_format, dry_run=True)
+        if args.dry_run or plan["status"] in ("already_current", "no_secrets"):
+            print(json.dumps(plan, indent=2, sort_keys=True))
+            return 0
+        if not args.yes:
+            if command == "rollback":
+                print(
+                    "AgentSecure will convert %s vault record(s) to v1 for an older release."
+                    % plan["records"]
+                )
+                print("This intentionally restores the older at-rest format; no secret values will be printed.")
+            else:
+                print(
+                    "AgentSecure will migrate %s vault record(s) from v%s to v%s."
+                    % (plan["records"], plan["source_format"], plan["target_format"])
+                )
+                print("The current vault is verified and snapshotted before the atomic replacement.")
+            answer = input("Continue? [y/N]: ").strip().lower()
+            if answer not in ("y", "yes"):
+                print("Vault %s cancelled." % command)
+                return 1
+        if command == "migrate":
+            result = service.migrate(target_format, dry_run=False)
+        else:
+            result = service.rollback(target_format, dry_run=False)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    except (VaultMigrationError, OSError, RuntimeError, ValueError) as exc:
+        sys.stderr.write("agentsecure: vault %s failed: %s\n" % (command or "status", exc))
+        return 1
 
 
 def _alias_id_for_env_name(env_name: str) -> str:

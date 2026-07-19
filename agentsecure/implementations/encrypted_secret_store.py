@@ -14,15 +14,23 @@ class EncryptedLocalSecretStore(SecretStore):
         self,
         path: str = ".agentsecure/secrets.enc.json",
         cipher: LocalSecretCipher = None,
+        cipher_name: str = "agentsecure-local-v1",
+        record_version: int = 1,
+        read_ciphers: Dict = None,
     ) -> None:
         self._path = path
         self._cipher = cipher
+        self._cipher_name = cipher_name
+        self._record_version = record_version
+        self._read_ciphers = dict(read_ciphers or {})
+        if cipher is not None:
+            self._read_ciphers.setdefault(cipher_name, cipher)
 
     def put(self, secret_id: str, secret_value: str) -> None:
         data = self._read_raw()
         data[secret_id] = {
-            "version": 1,
-            "cipher": "agentsecure-local-v1",
+            "version": self._record_version,
+            "cipher": self._cipher_name,
             "ciphertext": self._cipher_or_raise().encrypt(secret_value),
         }
         self._write_raw(data)
@@ -34,9 +42,12 @@ class EncryptedLocalSecretStore(SecretStore):
         ciphertext = str(item.get("ciphertext", ""))
         if not ciphertext:
             return None
+        cipher = self._read_ciphers.get(str(item.get("cipher", "")))
+        if cipher is None:
+            return None
         try:
-            return self._cipher_or_raise().decrypt(ciphertext)
-        except (ValueError, TypeError):
+            return cipher.decrypt(ciphertext)
+        except Exception:
             return None
 
     def delete(self, secret_id: str) -> bool:

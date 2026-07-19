@@ -190,6 +190,26 @@ What this does:
 The current Community vault encrypts secret values at rest, but its local device key is stored under the same `~/.agentsecure/vault/` directory with owner-only filesystem permissions. This prevents plaintext disclosure from the encrypted data file alone, but it is not isolation from a hostile process with unrestricted shell access as the same OS user. The MCP broker keeps raw credentials out of normal agent context and sends approved credential-bearing requests itself; command guidance and command-guard are not a hard sandbox.
 
 Use development-only, scoped credentials and run untrusted agents in an OS sandbox or separate execution identity. Keychain/user-presence-backed key isolation is tracked as a separate hardening layer rather than implied by the current local-file vault.
+
+### Vault format upgrades and downgrades
+
+New vaults write AES-256-GCM v2 records. Existing v1 vaults are never rewritten just because the Python package was upgraded. Inspect, verify, preview, and then migrate explicitly:
+
+```bash
+agentsecure vault status
+agentsecure vault verify
+agentsecure vault migrate --dry-run
+agentsecure vault migrate
+```
+
+Before downgrading the package to a version that only understands v1, convert every current record back to v1:
+
+```bash
+agentsecure vault rollback --dry-run --to-format v1
+agentsecure vault rollback --to-format v1
+```
+
+Rollback converts the current data, including secrets added after migration. See [Vault format migration and rollback](docs/vault-migrations.md) for the transaction order, recovery behavior, and compatibility table.
 - `agentsecure.json` stores only alias metadata such as `dev_db`, `DATABASE_URL`, provider, and approved hosts.
 - For MCP calls, AgentSecure creates a short-lived fake token such as `virt_database_...`.
 - The MCP request tool swaps placeholders for real secrets only when the destination host and port are allowed by network policy.

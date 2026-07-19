@@ -1,0 +1,24 @@
+{
+  "fixture_api": {
+    "alias_id": "fixture_api",
+    "approved_hosts": [
+      "api.example.invalid"
+    ],
+    "env_name": "FIXTURE_API_KEY",
+    "inject_as": "authorization_bearer",
+    "name": "fixture_api",
+    "provider": "custom",
+    "secret_ref": "local:alias_custom_fixture_api"
+  },
+  "fixture_db": {
+    "alias_id": "fixture_db",
+    "approved_hosts": [
+      "db.example.invalid"
+    ],
+    "env_name": "FIXTURE_DATABASE_URL",
+    "inject_as": "authorization_bearer",
+    "name": "fixture_db",
+    "provider": "database",
+    "secret_ref": "local:alias_database_fixture_db"
+  }
+}

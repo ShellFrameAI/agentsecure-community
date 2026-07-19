@@ -39,4 +39,6 @@ Vault secret values are encrypted at rest, but the Community local-file encrypti
 
 Current dotenv recovery backups use an encrypted `.asbak` format. Older AgentSecure releases created plaintext `.bak` recovery files with owner-only permissions. `agentsecure doctor` reports those files, and `agentsecure secrets backups migrate` encrypts and verifies them before removing the plaintext originals.
 
+New vaults use AES-256-GCM v2 records. Existing v1 vaults require an explicit, verified `agentsecure vault migrate`; package installation alone does not mutate stored credentials. Use `agentsecure vault rollback --to-format v1` before installing a release that cannot read v2. Vault-format upgrades do not by themselves isolate the local-file device key from a hostile same-user process.
+
 For stronger isolation, use workspace copy mode and operating-system sandboxing.
