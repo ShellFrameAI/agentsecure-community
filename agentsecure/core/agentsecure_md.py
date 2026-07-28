@@ -4,17 +4,24 @@ from typing import Any, Dict, List
 
 
 AGENTSECURE_MD = "AGENTSECURE.md"
-AGENTSECURE_MD_TEMPLATE_VERSION = "0.1.6"
+AGENTSECURE_MD_TEMPLATE_VERSION = "0.1.7"
 
 AGENTSECURE_MD_TEMPLATE = """# AGENTSECURE.md
 
 ## Start
 
-Run coding agents through AgentSecure:
+Set up AgentSecure MCP once:
 
 ```bash
-agentsecure run --protect-all -- claude
+agentsecure start --client claude
+# or
+agentsecure start --client codex --install-mcp
 ```
+
+Apply any MCP configuration step printed during setup, then start Claude Code or
+Codex normally. Secret-bearing HTTP requests must use
+`agentsecure.http.request`. The `agentsecure run` wrapper is an advanced
+compatibility mode, not the default flow.
 
 ## Secrets
 

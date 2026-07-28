@@ -14,8 +14,13 @@ class CliLifecycleIntegrationTest(unittest.TestCase):
             self.assertIn("Initialized AgentSecure", init_result.stdout)
             self.assertIn("review AGENTSECURE.md", init_result.stdout)
             self.assertIn("agentsecure policy validate", init_result.stdout)
-            self.assertIn("agentsecure discover", init_result.stdout)
-            self.assertIn("agentsecure run --protect-all -- <agent-command>", init_result.stdout)
+            self.assertIn("for Claude: agentsecure start --client claude", init_result.stdout)
+            self.assertIn(
+                "for Codex: agentsecure start --client codex --install-mcp",
+                init_result.stdout,
+            )
+            self.assertIn("then start the coding agent normally", init_result.stdout)
+            self.assertNotIn("agentsecure run", init_result.stdout)
             self.assertIn("agentsecure status", init_result.stdout)
             self.assertNotIn("agentsecure api", init_result.stdout)
             self.assertTrue(os.path.exists(os.path.join(temp_dir, "agentsecure.json")))

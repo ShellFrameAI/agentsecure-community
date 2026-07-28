@@ -16,6 +16,16 @@ class AgentSecureMdTest(unittest.TestCase):
                 validation = validate_agentsecure_md()
                 self.assertTrue(validation["ok"], validation)
                 self.assertEqual([], validation["errors"])
+                with open("AGENTSECURE.md", "r", encoding="utf-8") as handle:
+                    template = handle.read()
+                self.assertIn("agentsecure start --client claude", template)
+                self.assertIn(
+                    "agentsecure start --client codex --install-mcp",
+                    template,
+                )
+                self.assertIn("Apply any MCP configuration step", template)
+                self.assertIn("Codex normally.", template)
+                self.assertNotIn("agentsecure run --protect-all", template)
             finally:
                 os.chdir(cwd)
 
