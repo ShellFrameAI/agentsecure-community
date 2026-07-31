@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts.secret_scan import scan_path
 
@@ -35,6 +36,18 @@ class SecretScanTest(unittest.TestCase):
 
         self.assertEqual(1, len(findings))
         self.assertEqual("github token", findings[0].kind)
+
+    def test_allows_scanner_fixture_with_windows_path_separator(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "fixture.py")
+            with open(path, "w") as handle:
+                handle.write("token=ghp_1234567890abcdefghijklmnopqrstuvwxyz\n")
+
+            with patch(
+                "scripts.secret_scan.os.path.relpath",
+                return_value=r"tests\test_secret_scan.py",
+            ):
+                self.assertEqual([], scan_path(temp_dir))
 
 
 if __name__ == "__main__":

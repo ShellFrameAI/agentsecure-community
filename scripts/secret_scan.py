@@ -91,6 +91,7 @@ def _iter_files(root: str) -> Iterable[str]:
 
 
 def _is_allowed_placeholder(kind: str, value: str, rel_path: str) -> bool:
+    rel_path = rel_path.replace("\\", "/")
     if value in ALLOWED_SECRET_VALUES:
         return True
     if kind == "github token" and rel_path == "tests/test_secret_scan.py":
