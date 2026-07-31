@@ -3,12 +3,12 @@ import json
 import os
 import secrets
 import string
-import tempfile
 from dataclasses import asdict
 from typing import Dict, Iterable, List, Optional
 
 from agentsecure.core.config import JsonConfigWriter
 from agentsecure.core.models import ProjectSecretAlias, SecretAlias, SecretBinding
+from agentsecure.core.secure_files import write_private_json
 from agentsecure.core.time import DEFAULT_TTL_SECONDS, now_seconds, parse_duration_seconds
 from agentsecure.interfaces.audit import AuditLogger
 from agentsecure.interfaces.grants import GrantStore
@@ -75,19 +75,8 @@ class LocalSecretAliasStore:
         return aliases
 
     def _write(self, aliases: Dict[str, SecretAlias]) -> None:
-        directory = os.path.dirname(self._path) or "."
-        os.makedirs(directory, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix=".aliases-", dir=directory)
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                json.dump({key: asdict(value) for key, value in aliases.items()}, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-            os.replace(temp_path, self._path)
-            os.chmod(self._path, 0o600)
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        data = {key: asdict(value) for key, value in aliases.items()}
+        write_private_json(self._path, data, ".aliases-")
 
 
 class SecretAliasService:

@@ -221,20 +221,23 @@ class CliTest(unittest.TestCase):
             try:
                 os.chdir(project_dir)
                 output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(
-                        0,
-                        main(
-                            [
-                                "--config",
-                                config_path,
-                                "start",
-                                "--yes",
-                                "--approved-host",
-                                "https://api.example.com",
-                            ]
-                        ),
-                    )
+                with patch.object(os, "fchmod", None, create=True):
+                    with redirect_stdout(output):
+                        self.assertEqual(
+                            0,
+                            main(
+                                [
+                                    "--config",
+                                    config_path,
+                                    "start",
+                                    "--yes",
+                                    "--client",
+                                    "codex",
+                                    "--approved-host",
+                                    "https://api.example.com",
+                                ]
+                            ),
+                        )
                 text = output.getvalue()
                 self.assertIn("Ready.", text)
                 self.assertIn("codex mcp add agentsecure --", text)

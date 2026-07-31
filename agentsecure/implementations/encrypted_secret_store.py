@@ -1,9 +1,9 @@
 import json
 import os
-import tempfile
 from typing import Dict, Optional
 
 from agentsecure.crypto.cipher import LocalSecretCipher
+from agentsecure.core.secure_files import write_private_json
 from agentsecure.interfaces.key_store import SecretStore
 
 
@@ -66,16 +66,4 @@ class EncryptedLocalSecretStore(SecretStore):
         return result
 
     def _write_raw(self, data: Dict[str, Dict[str, str]]) -> None:
-        directory = os.path.dirname(self._path) or "."
-        os.makedirs(directory, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix=".secrets-enc-", dir=directory)
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w") as handle:
-                json.dump(data, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-            os.replace(temp_path, self._path)
-            os.chmod(self._path, 0o600)
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        write_private_json(self._path, data, ".secrets-enc-")

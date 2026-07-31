@@ -25,8 +25,9 @@ class EncryptedLocalSecretStoreTest(unittest.TestCase):
             data = json.loads(raw)
             self.assertEqual("agentsecure-local-v1", data["openai_1"]["cipher"])
             self.assertTrue(os.path.exists(key_path))
-            self.assertEqual(0, os.stat(key_path).st_mode & 0o077)
-            self.assertEqual(0, os.stat(store_path).st_mode & 0o077)
+            if os.name != "nt":
+                self.assertEqual(0, os.stat(key_path).st_mode & 0o077)
+                self.assertEqual(0, os.stat(store_path).st_mode & 0o077)
 
 
 if __name__ == "__main__":
