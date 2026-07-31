@@ -2,11 +2,18 @@
 
 ## Start
 
-Run coding agents through AgentSecure:
+Set up AgentSecure MCP once:
 
 ```bash
-agentsecure run --protect-all -- claude
+agentsecure start --client claude
+# or
+agentsecure start --client codex --install-mcp
 ```
+
+Apply any printed MCP configuration, then start Claude Code or Codex normally.
+For secret-bearing HTTP requests, use
+`agentsecure.http.request`. The `agentsecure run` wrapper is an advanced
+compatibility mode, not the default flow.
 
 ## Secrets
 

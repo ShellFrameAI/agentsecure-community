@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.23 - 2026-07-31
+
+- Focused the README and friend quick start on the minimal MCP-first setup flow: install, optionally scan, run guided setup once, and then start Claude Code or Codex normally.
+- Added focused documentation for the default workflow, client setup, MCP usage, secret management, network policy, security boundaries, vault behavior, scanning, advanced runtime mode, CLI usage, architecture, and uninstall/restore.
+- Updated generated `AGENTSECURE.md` guidance and initialization next steps to prefer `agentsecure start`, while documenting `agentsecure run` as an advanced compatibility mode.
+
 ## 0.1.22 - 2026-07-14
 
 - Added an end-to-end secret canary release gate covering guided setup, protected agent execution, approved MCP credential use, response redaction, and audit-log safety.

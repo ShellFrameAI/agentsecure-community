@@ -1,16 +1,25 @@
 # AgentSecure Community
 
-AgentSecure is a local-first security runtime for AI coding agents. Real secrets
-stay in a local vault and agents use bounded placeholders and MCP tools.
+AgentSecure lets AI coding agents use credentials without exposing the real
+secret values to the agent.
 
-## Agent setup
+The default workflow is: install AgentSecure, run guided setup once, apply the
+MCP configuration, then start Claude Code or Codex normally. Secret-bearing
+HTTP requests use `agentsecure.http.request`. Do not present
+`agentsecure run -- <agent>` as the default.
 
+For Claude Code, run `agentsecure start --client claude`. For Codex, run
+`agentsecure start --client codex --install-mcp`.
+
+## Default setup
+
+- [Default workflow](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/default-workflow.md)
 - [Claude Code setup](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/claude-code-setup.md)
-- [Project overview and CLI reference](https://github.com/ShellFrameAI/agentsecure-community/blob/main/README.md)
-- [Security model](https://github.com/ShellFrameAI/agentsecure-community/blob/main/SECURITY.md)
-- [Contribution guide](https://github.com/ShellFrameAI/agentsecure-community/blob/main/CONTRIBUTING.md)
+- [Codex setup](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/codex-setup.md)
+- [MCP usage](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/mcp.md)
 
-For Claude Code, inspect the repository's existing Python toolchain before
-installation, then run `agentsecure start --client claude`. This creates or
-updates persistent AgentSecure guidance in `CLAUDE.md` without replacing
-existing project instructions.
+## Security and reference
+
+- [Security model](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/security-model.md)
+- [Vault and backups](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/vault-and-backups.md)
+- [CLI reference](https://github.com/ShellFrameAI/agentsecure-community/blob/main/docs/cli-reference.md)

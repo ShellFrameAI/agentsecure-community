@@ -67,8 +67,9 @@ class ProductService:
             "next_steps": [
                 "review AGENTSECURE.md",
                 "agentsecure policy validate",
-                "agentsecure discover",
-                "agentsecure run --protect-all -- <agent-command>",
+                "for Claude: agentsecure start --client claude",
+                "for Codex: agentsecure start --client codex --install-mcp",
+                "then start the coding agent normally",
                 "agentsecure status",
             ],
         }
