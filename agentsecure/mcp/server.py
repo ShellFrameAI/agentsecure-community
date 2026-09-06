@@ -39,10 +39,12 @@ class McpServer:
                 params = message.get("params", {}) if isinstance(message.get("params", {}), dict) else {}
                 return self._result(message_id, self._call_tool(str(params.get("name", "")), params.get("arguments", {})))
             return self._error(message_id, -32601, "Method not found: %s" % method)
-        except (DurationError, McpHttpError, SecretAliasError, ValueError) as exc:
-            return self._error(message_id, -32000, str(exc))
-        except Exception as exc:
-            return self._error(message_id, -32603, "AgentSecure MCP error: %s" % exc)
+        except (DurationError, McpHttpError, SecretAliasError, ValueError):
+            return self._error(message_id, -32000, "Invalid AgentSecure MCP request. Check the tool arguments and project configuration.")
+        except Exception:
+            # Failures in setup, sanitation, audit, or cleanup can contain raw
+            # credentials even when the HTTP response itself was sanitized.
+            return self._error(message_id, -32603, "AgentSecure MCP request failed. Check the project configuration and local vault availability.")
 
     def _call_tool(self, name: str, arguments: Any) -> Dict[str, Any]:
         args = arguments if isinstance(arguments, dict) else {}

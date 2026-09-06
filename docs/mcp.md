@@ -74,12 +74,19 @@ The tool:
 3. creates short-lived virtual bindings for the request;
 4. resolves only aliases assigned to the project and approved for that host;
 5. sends the request from the AgentSecure MCP process;
-6. sanitizes response headers and body before returning them;
+6. sanitizes response headers (names and values), reason, and body before returning them;
 7. revokes the temporary bindings when the request ends.
 
 If policy blocks the destination, the result includes a suggested
 `agentsecure network allow ...` command. Requests without secret placeholders
 are intentionally blocked; use normal agent networking tools for those.
+
+Transport and unexpected runtime errors use fixed diagnostic messages instead
+of raw exception text, because exceptions can include substituted credentials.
+Malformed request values return `mcp.invalid_request`; connection and HTTP
+transport failures return `mcp.request_failed`. Missing-secret and destination
+policy errors retain their safe guidance. Ordinary upstream HTTP statuses,
+including 4xx and 5xx responses, are still returned as HTTP responses.
 
 ## Status and diagnostics
 
