@@ -110,11 +110,20 @@ def perform_http_request(config_path: str, arguments: Dict[str, Any]) -> Dict[st
         )
         return sanitized
     except McpHttpError as exc:
-        container.audit_logger.record("mcp_http_request", {"allowed": False, "reason": str(exc), "placeholders": placeholders, "run_id": run_id})
-        return {"blocked": True, "reason": str(exc), "rule_id": "mcp.secret_resolution"}
-    except (OSError, http.client.HTTPException, TimeoutError) as exc:
-        container.audit_logger.record("mcp_http_request", {"allowed": False, "reason": str(exc), "placeholders": placeholders, "run_id": run_id})
-        return {"blocked": True, "reason": str(exc), "rule_id": "mcp.request_failed"}
+        # These are our own validation/resolution messages, not transport errors.
+        reason = _redact_resolved(str(exc), resolved_values)
+        container.audit_logger.record("mcp_http_request", {"allowed": False, "reason": reason, "placeholders": placeholders, "run_id": run_id})
+        return {"blocked": True, "reason": reason, "rule_id": "mcp.secret_resolution"}
+    except (OSError, http.client.HTTPException, TimeoutError):
+        # Exception strings may contain substituted headers, URLs, or encoded
+        # credentials. Do not return or log them, even after literal redaction.
+        reason = "HTTP request failed. Check the destination, connectivity, and TLS configuration."
+        container.audit_logger.record("mcp_http_request", {"allowed": False, "reason": reason, "placeholders": placeholders, "run_id": run_id})
+        return {"blocked": True, "reason": reason, "rule_id": "mcp.request_failed"}
+    except (ValueError, TypeError):
+        reason = "Invalid HTTP request. Check the URL, method, headers, body, and request options."
+        container.audit_logger.record("mcp_http_request", {"allowed": False, "reason": reason, "placeholders": placeholders, "run_id": run_id})
+        return {"blocked": True, "reason": reason, "rule_id": "mcp.invalid_request"}
     finally:
         revoke_mcp_bindings(config_path, bindings, run_id)
 
@@ -178,23 +187,24 @@ def _send(method: str, url: str, headers: Dict[str, str], body: str, arguments: 
 
 def _sanitize_response(config_path: str, resolved_values: Dict[str, str], response: Dict[str, Any]) -> Dict[str, Any]:
     sanitizer = SecretOutputSanitizer.from_config_path(config_path)
-    text = sanitizer.sanitize_text(str(response.get("body", "")))
-    headers = {}
-    for key, value in dict(response.get("headers", {})).items():
-        sanitized_value = sanitizer.sanitize_text(str(value))
-        for secret in resolved_values.values():
-            if not secret:
-                continue
-            sanitized_value = sanitized_value.replace(secret, "[redacted]")
-        headers[key] = sanitized_value
-    for secret in resolved_values.values():
-        if not secret:
-            continue
-        text = text.replace(secret, "[redacted]")
+
+    def sanitize(value: str) -> str:
+        return sanitizer.sanitize_text(_redact_resolved(str(value), resolved_values))
+
+    # Keep the response schema and status intact; redact all upstream text.
     result = dict(response)
-    result["headers"] = headers
-    result["body"] = text
+    result["headers"] = {sanitize(key): sanitize(value) for key, value in response.get("headers", {}).items()}
+    result["reason"] = sanitize(response.get("reason", ""))
+    result["body"] = sanitize(response.get("body", ""))
     return result
+
+
+def _redact_resolved(value: str, resolved_values: Dict[str, str]) -> str:
+    # Replacing a shorter overlapping value first would expose the suffix.
+    for secret in sorted(set(resolved_values.values()), key=len, reverse=True):
+        if secret:
+            value = value.replace(secret, "[redacted]")
+    return value
 
 
 def _default_port(scheme: str) -> int:
