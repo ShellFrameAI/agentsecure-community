@@ -69,34 +69,89 @@ class McpServer:
         return [
             {
                 "name": "agentsecure.policy.describe",
-                "description": "Describe AgentSecure project policy and secret aliases without exposing secret values.",
+                "description": (
+                    "Inspect the current project's network rules and configured secret metadata before a secret-bearing "
+                    "HTTP request. Takes no arguments. Returns network (allowed domains/ports and IP restrictions), "
+                    "secret_aliases, project_bindings, and usage instructions; no secret values. Does not change policy "
+                    "or verify that credentials work. Use agentsecure.secret.status for one env name, or "
+                    "agentsecure.get_policy_hint for a Mesh action rather than HTTP destination policy."
+                ),
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
             },
             {
                 "name": "agentsecure.secret.status",
-                "description": "Check whether a placeholder env name is configured without returning the secret value.",
+                "description": (
+                    "Check whether one environment name is assigned in the current project's secret configuration "
+                    "before using its ${ENV_NAME} placeholder. Returns exists and env_name; when configured, also "
+                    "returns source (vault_alias or project_binding), provider, mode, and alias metadata when applicable. "
+                    "This is a configuration lookup, not a vault-value or credential-validity check, and returns no "
+                    "secret value. Use agentsecure.policy.describe to list all configured aliases and bindings. "
+                    "Example: {\"env_name\": \"API_KEY\"}."
+                ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {"env_name": {"type": "string"}},
+                    "properties": {
+                        "env_name": {
+                            "type": "string",
+                            "description": "Exact configured environment name, e.g. API_KEY, without ${...}; not an alias ID or a secret value.",
+                        }
+                    },
                     "required": ["env_name"],
                     "additionalProperties": False,
                 },
             },
             {
                 "name": "agentsecure.http.request",
-                "description": "Send one HTTP(S) request with ${ENV_NAME} placeholders resolved only for approved destinations.",
+                "description": (
+                    "Send one HTTP(S) request that needs a configured secret, using ${ENV_NAME} placeholders instead "
+                    "of raw credentials. Checks project destination policy before resolving secrets and applies "
+                    "configured vault-alias host restrictions; calls without placeholders are blocked (use ordinary network tools for those). "
+                    "Performs the requested remote operation, does not follow redirects, and revokes temporary alias "
+                    "grants afterward. Returns blocked=false, status, reason, headers, and a UTF-8 body, with response "
+                    "body/header values sanitized for known secrets; HTTP error statuses are still responses. "
+                    "Blocked calls return blocked=true, reason, rule_id, and sometimes allow_command; configuration "
+                    "errors may instead be MCP errors. This is not a sandbox for other network tools. "
+                    "Example: {\"url\": \"https://api.example.com/me\", \"headers\": {\"Authorization\": \"Bearer ${API_KEY}\"}} "
+                    "requires that host and API_KEY to be configured and approved."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "method": {"type": "string"},
-                        "url": {"type": "string"},
-                        "headers": {"type": "object"},
-                        "query": {"type": "object"},
-                        "json": {},
-                        "body": {"type": "string"},
-                        "timeout_seconds": {"type": "number"},
-                        "verify_tls": {"type": "boolean"},
-                        "ttl": {"type": "string"},
+                        "method": {
+                            "type": "string",
+                            "description": "HTTP method, e.g. GET or POST; defaults to GET and is uppercased. Choose a method appropriate for the authorized operation.",
+                        },
+                        "url": {
+                            "type": "string",
+                            "description": "Absolute http:// or https:// URL with a host approved by project policy. Placeholders may appear in the path/query, never the host or port. Prefer HTTPS.",
+                        },
+                        "headers": {
+                            "type": "object",
+                            "description": "Header name/value map; defaults to {} and values are converted to strings. Put secret placeholders in values, e.g. {\"Authorization\": \"Bearer ${API_KEY}\"}.",
+                        },
+                        "query": {
+                            "type": "object",
+                            "description": "Query name/value map appended to any URL query; defaults to {}. Values are stringified and URL-encoded; string values may contain placeholders. Arrays are not expanded into repeated parameters.",
+                        },
+                        "json": {
+                            "description": "JSON-serializable request payload. When supplied and non-null, overrides body and sets the exact Content-Type header key to application/json unless already provided. Placeholders are replaced in string values, not object keys.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "UTF-8 text request body, optionally containing placeholders; defaults to empty. Ignored when a non-null json payload is supplied.",
+                        },
+                        "timeout_seconds": {
+                            "type": "number",
+                            "description": "Connection/socket timeout in seconds, not an overall task deadline. Use a positive number; omission or 0 uses 30 seconds.",
+                        },
+                        "verify_tls": {
+                            "type": "boolean",
+                            "description": "Whether to verify HTTPS certificates; defaults to true. False disables verification and weakens protection; leave enabled for normal use. Has no effect on HTTP.",
+                        },
+                        "ttl": {
+                            "type": "string",
+                            "description": "Lifetime of temporary vault-alias grants; defaults to 2h. Positive integer plus optional s, m, h, or d (bare number means seconds), at most 24h, e.g. 30m. Grants are revoked after the request; this is not the HTTP timeout.",
+                        },
                     },
                     "required": ["url"],
                     "additionalProperties": False,
