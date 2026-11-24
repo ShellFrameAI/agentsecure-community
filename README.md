@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/agentsecure.svg)](https://pypi.org/project/agentsecure/)
 [![CI](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml/badge.svg)](https://github.com/ShellFrameAI/agentsecure-community/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/ShellFrameAI/agentsecure-community/blob/main/LICENSE)
+[![ShellFrameAI/agentsecure-community MCP server](https://glama.ai/mcp/servers/ShellFrameAI/agentsecure-community/badges/score.svg)](https://glama.ai/mcp/servers/ShellFrameAI/agentsecure-community)
 
 Make credential-bearing HTTP(S) requests from Claude Code and Codex through
 MCP, using placeholders instead of raw credentials in project files and MCP
